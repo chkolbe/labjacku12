@@ -19,30 +19,47 @@ class LabjackU12(object):
 
     def __init__(self, usbdev):
         self.dev = usbdev
+        self.open()
+        self.init_read()
+        self.caldata = self.calibration()
 
     def open(self):
         self.handle = self.dev.open()
         # self.handle.reset()
+        # self.handle.setConfiguration(0)
         self.interface = \
             self.dev.configurations[self.id_configuration
                     ].interfaces[self.id_interface][0]
-        self.handle.detachKernelDriver(self.id_interface)
-        self.handle.claimInterface(self.interface)
         self.ep_in = self.interface.endpoints[0]
         self.ep_out = self.interface.endpoints[1]
+        assert self.ep_in.address == 0x81
+        assert self.ep_out.address == 0x02
         assert self.ep_in.type == usb.ENDPOINT_TYPE_INTERRUPT
         assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
+        self.handle.detachKernelDriver(self.id_interface)
+        self.handle.claimInterface(self.interface)
+
+    def init_read(self):
+        assert self.write((0,)*8) == 8
+        try:
+            return self.read(8)
+        except usb.USBError:
+            time.sleep(0.02)
+            pass
+
+    def __del__(self):
+        self.close()
 
     def close(self):
         self.handle.releaseInterface()
         del self.handle
 
-    def feature(self):
+    def feature_read(self):
         return self.handle.controlMsg(
             requestType=usb.TYPE_CLASS|usb.RECIP_INTERFACE|usb.ENDPOINT_IN,
             request=usb.REQ_CLEAR_FEATURE,
             value=(0x03<<8)+0x00, index=0, buffer=128, 
-            timeout=500)
+            timeout=5000)
 
     def write(self, buf, tmo=100):
         return self.handle.interruptWrite(
@@ -53,13 +70,8 @@ class LabjackU12(object):
                 self.ep_in.address, siz, tmo)
 
     def writeread(self, w, tmo=100):
-        assert self.write(w) == 8
-        try:
-            r = self.read(8, tmo)
-        except usb.USBError:
-            time.sleep(0.01)
-            assert self.write(w) == 8
-            r = self.read(8, tmo)
+        assert self.write(w, tmo) == 8
+        r = self.read(8, tmo)
         return tuple(v&0xff for v in r)
 
     def read_mem(self, ad):
@@ -72,7 +84,7 @@ class LabjackU12(object):
 
     def serial(self):
         r = self.read_mem(0)
-        return sum(ri<<(8*i) for i, ri in enumerate(r[::-1]))
+        return sum(ri << 8*i for i, ri in enumerate(r[::-1]))
 
     def calibration(self):
         a = np.array([self.read_mem(0x100+(0x010*j)) for j in range(8)])
@@ -106,38 +118,102 @@ class LabjackU12(object):
         ao1 = int(round(ao1/5.*1023))
 
         w = divmod(conf_d, 0x100) + divmod(state_d, 0x100) + (
-            (conf_io<<4) | state_io,
-            (set_d<<4) | (reset_c<<5) | ((ao0&0x3)<<2) | ((ao1&0x3)<<0),
-            ao0>>2, ao1>>2)
+            (conf_io << 4) | state_io,
+            (set_d << 4) | (reset_c << 5) | ((ao0 & 0x3) << 2) 
+                | ((ao1 & 0x3) << 0),
+            ao0 >> 2, ao1 >> 2)
         r = self.writeread(w, tmo=1000)
 
-        assert not r[0] & (1<<7)
-        state_d = (r[1]<<8) + r[2]
-        state_io = r[3]>>4
-        count = sum((v<<(i*8) for i,v in enumerate(r[4:][::-1])))
+        assert not r[0] & (1 << 7)
+        state_d = (r[1] << 8) + r[2]
+        state_io = r[3] >> 4
+        count = sum((v << i*8) for i,v in enumerate(r[4::-1]))
         return state_d, state_io, count
 
-    def analog_input(self, state_io, set_io, led, channels, gains):
+    def mux_cmd(self, ch, g):
+        assert 0 <= g <= 7
+        assert (ch >= 8) | (g == 0)
+        return 1 | (g << 4) | (ch^0x10)
+
+    gains = [1, 2, 4, 5, 8, 10, 16, 20]
+    def apply_calibration(self, ch, g, v):
+        if ch < 8:
+            ch &= 0x7
+            off = self.caldata[ch]
+            v -= off
+            gaincal = self.caldata[ch + 8]
+            v += (v-2048) / 512. * (off-gaincal)
+        else:
+            ch &= 0x3
+            gain = self.gains[g]
+            czse = self.caldata[2*ch] - self.caldata[2*ch+1]
+            off = gain*czse/2. + self.caldata[ch+16] - czse/2.
+            v -= off
+            ccdiff = self.caldata[2*ch+8]-self.caldata[2*ch] - \
+                    self.caldata[2*ch+9]+self.caldata[2*ch+1]
+            if ccdiff >= 2:
+                v -= (v-2048)/256.
+            elif ccdiff <= -2:
+			    v += (v-2048)/256.
+        return max(min(v, 4095), 0)
+
+    def bits_to_volts(self, ch, g, b):
+        if ch < 8:
+            return b*20./4096 - 10 / self.gains[g]
+        else:
+            return (b*40./4096 - 20) / self.gains[g] 
+
+    def analog_input(self, state_io, set_io, led, channels, gains,
+            c7=0, cmd=12):
         assert len(channels) in (1,2,4)
         assert 0 <= state_io <= 0xf
-        c = np.random.bytes(1)
-        c7 = 0
-        cmd = 12
-        w = (mux1, mux2, mux3, mux4, (led<<0) | (set_io<<1),
-                (cmd<<4) | (state_io<<0), 0, c)
+        challenge = ord(np.random.bytes(1))
+        muxs = tuple(self.mux_cmd(ch, g) for ch, g in 
+                zip(channels, gains))
+        w = muxs + ((led << 0) | (set_io << 1),
+                    (cmd << 4) | (state_io << 0),
+                    c7, challenge)
+        r = self.writeread(w, 1000)
+        assert r[0] & (1 << 7)
+        assert r[1] == challenge
+        overvoltage = bool(r[0] & (1<<4))
+        ofchecksum = bool(r[0] & (1<<5))
+        state_io = r[0] & 0xf
+        iterations = r[1] >> 5
+        bits = (((r[2] & 0xf0) << 4) + r[3],
+                ((r[2] & 0x0f) << 8) + r[4],
+                ((r[5] & 0xf0) << 4) + r[6],
+                ((r[5] & 0x0f) << 8) + r[7])
+        volts = [self.bits_to_volts(c, g, self.apply_calibration(c, g, v))
+                for c, g, v in zip(channels, gains, bits)]
+        count = sum(v<<i*8 for i,v in enumerate(r[4::-1]))
+        return overvoltage, ofchecksum, state_io, bits, volts, count
 
+    def count(self, reset):
+        w = (reset & 1 | 0, 0, 0, 0, 82, 0, 0, 0)
+        a = time.time()
+        r = self.writeread(w, 100)
+        t = (time.time()+a)/2.
+        count = sum((v << i*8) for i,v in enumerate(r[4::-1]))
+        return count, t 
 
 if __name__ == "__main__":
     for d in LabjackU12.find_all():
         print d
-        d.open()
-        #print d.feature()
-        #print d.read_mem(0)
+        # d.open()
+        # print d.reset()
+        # print np.array([d.read_mem(i) for i in range(0, 8188, 4)])
         print d.serial()
         print d.local_id()
         print d.calibration()
         print d.firmware_version()
-        print d.analog_output(0, 0, 0, 0, 2, 2,
+        print d.analog_output(0, 0, 0, 0, 1, 4,
                 False, False) # 16ms
-        # print d.reset()
-        d.close()
+        print d.analog_input(0, False, True, (0,1,2,3), (0,0,0,0)) # 16ms
+        print d.analog_input(0, False, True, (8,9,10,11), (0,1,1,0)) # 16ms
+        print d.count(True), d.count(False)
+        for v in np.linspace(0, 5., 10):
+            d.analog_output(0, 0, 0, 0, v, v, False, False)
+            print d.analog_input(0, False, True, (0,0,1,1), (0,0,0,0))
+
+        # d.close()
