@@ -1,0 +1,2 @@
+# ignore Labjack U12
+options usbhid quirks=0xcd5:0x1:0x4

@@ -1,0 +1,2 @@
+# Labjack U12
+ATTRS{idProduct}=="0001", ATTRS{idVendor}=="0cd5", GROUP="plugdev", MODE="0660"
