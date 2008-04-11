@@ -54,8 +54,8 @@ class LabjackU12(object):
         assert self.ep_out.address == 0x02
         assert self.ep_in.type == usb.ENDPOINT_TYPE_INTERRUPT
         assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
-        self.handle.detachKernelDriver(self.id_interface)
         self.handle.claimInterface(self.interface)
+        self.handle.detachKernelDriver(self.id_interface)
 
     def init_read(self):
         assert self.write((0,)*8) == 8
