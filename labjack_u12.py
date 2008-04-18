@@ -45,7 +45,7 @@ class LabjackU12(object):
     def open(self):
         self.handle = self.dev.open()
         # self.handle.reset()
-        # self.handle.setConfiguration(0)
+        self.handle.setConfiguration(1)
         self.interface = \
             self.dev.configurations[self.id_configuration
                     ].interfaces[self.id_interface][0]
@@ -55,8 +55,11 @@ class LabjackU12(object):
         assert self.ep_out.address == 0x02
         assert self.ep_in.type == usb.ENDPOINT_TYPE_INTERRUPT
         assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
+        try:
+            self.handle.detachKernelDriver(self.id_interface)
+        except usb.USBError:
+            pass
         self.handle.claimInterface(self.interface)
-        self.handle.detachKernelDriver(self.id_interface)
 
     def init_read(self):
         assert self.write((0,)*8) == 8
@@ -159,7 +162,7 @@ class LabjackU12(object):
             (set_d << 4) | (reset_c << 5) | ((ao0 & 0x3) << 2) 
                 | ((ao1 & 0x3) << 0),
             ao0 >> 2, ao1 >> 2)
-        print w
+        # print w
         r = self.writeread(w, tmo=1000)
 
         assert not r[0] & (1 << 7)
@@ -187,8 +190,8 @@ class LabjackU12(object):
             czse = self.caldata[2*ch] - self.caldata[2*ch+1]
             off = gain*czse/2. + self.caldata[ch+16] - czse/2.
             v -= off
-            ccdiff = self.caldata[2*ch+8]-self.caldata[2*ch] - \
-                    self.caldata[2*ch+9]+self.caldata[2*ch+1]
+            ccdiff = (self.caldata[2*ch+8]-self.caldata[2*ch]) - \
+                    (self.caldata[2*ch+9]-self.caldata[2*ch+1])
             if ccdiff >= 2:
                 v -= (v-2048)/256.
             elif ccdiff <= -2:
@@ -201,71 +204,90 @@ class LabjackU12(object):
         else:
             return (b*40./4096 - 20) / self.gains[g] 
 
-    def analog_input(self, state_io, set_io, led, channels, gains,
-            c7=0, cmd=12):
-        assert len(channels) in (1,2,4)
+    def analog_input(self, state_io, set_io, led, channels, gains):
+        assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
+        assert len(channels) == len(gains)
         assert 0 <= state_io <= 0xf
         challenge = ord(np.random.bytes(1))
         muxs = tuple(self.mux_cmd(ch, g) for ch, g in 
                 zip(channels, gains))
+        cmd = 4
         w = muxs + ((led << 0) | (set_io << 1),
-                    (cmd << 4) | (state_io << 0),
-                    c7, challenge)
-        #print w
+                    (1<<7) | (cmd << 4) | (state_io << 0),
+                    0, challenge)
         r = self.writeread(w, 1000)
         assert r[0] & (1 << 7)
         assert r[1] == challenge
-        overvoltage = bool(r[0] & (1<<4))
-        ofchecksum = bool(r[0] & (1<<5))
+        ofchecksum, overvoltage = bool(r[0] % (1<<5)), bool(r[0] & (1<<4))
         state_io = r[0] & 0xf
-        iterations = r[1] >> 5
         bits = (((r[2] & 0xf0) << 4) + r[3],
                 ((r[2] & 0x0f) << 8) + r[4],
                 ((r[5] & 0xf0) << 4) + r[6],
                 ((r[5] & 0x0f) << 8) + r[7])
-        #print bits
-        #print [self.apply_calibration(c, g, v) for c, g, v in zip(channels, gains, bits)]
         volts = [self.bits_to_volts(c, g, self.apply_calibration(c, g, v))
                 for c, g, v in zip(channels, gains, bits)]
-        count = sum(v<<i*8 for i,v in enumerate(r[4::-1]))
-        return overvoltage, ofchecksum, state_io, bits, volts, count
+        return overvoltage, ofchecksum, state_io, volts
 
     def e_analog_input(self, channels, gains=(0,0,0,0)):
-        return [time.time(),self.analog_input(0,0,0,channels,gains)[4]]
-        
-    def stream_start(self, state_io, set_io, led, channels, gains, scan_rate, read_count):
-        assert len(channels) in (1,2,4)
+        return [time.time(),self.analog_input(0,0,0,channels,gains)[3]]
+
+    def stream_start(self, state_io, set_io, led, channels, gains,
+            rate, read_count):
+        assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
+        assert len(channels) == len(gains)
         assert 0 <= state_io <= 0xf
-        turbo = 1
-        cmd = 9
-        sample_int = int(round(6000000.0/scan_rate/len(channels)))
+        assert 200 <= rate <= 1200
+        feature_reports = 1 # dubbed "turbo"
+        cmd = 1
+        sample_int = int(round(6e6/rate/len(channels)))
 
         muxs = tuple(self.mux_cmd(ch, g) for ch, g in 
                 zip(channels, gains))
-        w = muxs + ((led << 0) | (set_io << 1) | (turbo << 7) | (read_count << 6),
-                    (cmd << 4) | (state_io << 0),
-                    sample_int/256, sample_int%256)
+        w = muxs + ((led << 0) | (set_io << 1) | (feature_reports << 7) |
+                        (read_count << 6),
+                    (1<<7) | (cmd << 4) | (state_io << 0)) + \
+                    divmod(sample_int, 1<<8)
         self.write(w)
     
-    def stream_read(self, channels, gains, num_scans):
-        r = self.feature_read()
-        overvoltage = bool(r[0] & (1<<4))
-        ofchecksum = bool(r[0] & (1<<5))
-        state_io = r[0] & 0xf
-        iterations = r[1] >> 5
-        bits = (((r[2] & 0xf0) << 4) + r[3],
-                ((r[2] & 0x0f) << 8) + r[4],
-                ((r[5] & 0xf0) << 4) + r[6],
-                ((r[5] & 0x0f) << 8) + r[7])
-        #print bits
-        #print [self.apply_calibration(c, g, v) for c, g, v in zip(channels, gains, bits)]
-        volts = [self.bits_to_volts(c, g, self.apply_calibration(c, g, v))
-                for c, g, v in zip(channels, gains, bits)]
-        count = sum(v<<i*8 for i,v in enumerate(r[4::-1]))
-        return overvoltage, ofchecksum, state_io, bits, volts, count
+    def bulk_read(self, channels, gains):
+        resp = self.feature_read()
+        while len(resp) >= 8:
+            r, resp = resp[:8], resp[8:]
+            ofchecksum, overvoltage = bool(r[0] % (1<<5)), bool(r[0] & (1<<4))
+            state_io = r[0] & 0xf
+            iterations = r[1] >> 5
+            bits = (((r[2] & 0xf0) << 4) + r[3],
+                    ((r[2] & 0x0f) << 8) + r[4],
+                    ((r[5] & 0xf0) << 4) + r[6],
+                    ((r[5] & 0x0f) << 8) + r[7])
+            volts = [self.bits_to_volts(c, g, self.apply_calibration(c, g, v))
+                    for c, g, v in zip(channels, gains, bits)]
+            count = sum(v<<i*8 for i,v in enumerate(r[4::-1]))
+            yield overvoltage, ofchecksum, state_io, volts, count, iterations
         
-    def stream_stop(self):
-        self.analog_input(0, False, True, (0,1,2,3), (0,0,0,0))
+    def bulk_stop(self):
+        self.read_mem(0)
+
+    def burst_start(self, state_io, set_io, led, channels, gains,
+            num_scans, trigger, trigger_state, trigger_on,
+            rate):
+        assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
+        assert len(channels) == len(gains)
+        assert 0 <= state_io <= 0xf
+        feature_reports = 1 # dubbed "turbo"
+        cmd = 2
+        sample_int = int(round(6e6/rate/len(channels)))
+        if sample_int == 732:
+            sample_int = 733
+        assert 733 <= sample_int < (1<<14)
+        muxs = tuple(self.mux_cmd(ch, g) for ch, g in 
+                zip(channels, gains))
+        w = muxs + ((led << 0) | (set_io << 1) | (trigger_state << 2) |
+                    (trigger << 3) | (10-int(round(np.log2(num_scans)))),
+                    (1<<7) | (cmd << 4) | (state_io << 0),
+                    (feature_reports<<7) | (trigger_on<<6) | sample_int>>8,
+                    sample_int%256)
+        self.write(w)
 
     def count(self, reset):
         w = (reset & 1 | 0, 0, 0, 0, 82, 0, 0, 0)
@@ -284,18 +306,31 @@ if __name__ == "__main__":
         #print d.serial()
         #print d.local_id()
         #print d.calibration()
-        print d.firmware_version()
-        print d.e_analog_input((0,1,2,3))
-        #print d.analog_output(0, 0, 0, 0, 1, 4, False, False) # 16ms
+        #print d.firmware_version()
+        #print d.e_analog_input((0,1,2,3))
+        d.analog_output(0, 0, 0, 0, 1, 4, False, False) # 16ms
         #print d.digital_io(0,0,0,0,1)
-        d.stream_start(0,0,0,(0,1,2,3),(0,0,0,0),100,0)
-        print d.stream_read((0,1,2,3),(0,0,0,0),1)
+        chans, gains, scans = (8,9,10,11), (0,0,0,0), 1024
+        a = time.time()
+        #d.stream_start(
+        #        state_io=0, set_io=0, led=0, channels=chans, gains=gains,
+        #        rate=400, read_count=0)
+        d.burst_start(
+                state_io=0, set_io=0, led=0, channels=chans, gains=gains,
+                num_scans=scans, trigger=0, trigger_state=0, trigger_on=1,
+                rate=2048)
+        for i in range(scans/16):
+            for v in d.bulk_read(chans, gains):
+                pass 
+                #print v[3]
+        d.bulk_stop()
+        print scans/(time.time()-a)
 
         #print d.analog_input(0, False, True, (0,1,2,3), (0,0,0,0)) # 16ms
         #print d.analog_input(0, False, True, (8,9,10,11), (0,1,1,0)) # 16ms
         #print d.count(True), d.count(False)
-        #for v in np.linspace(0, 5., 10):
+        #for v in np.arange(0, 5.0001, .1):
         #    d.analog_output(0, 0, 0, 0, v, v, False, False)
-        #    print d.analog_input(0, False, True, (0,0,1,1), (0,0,0,0))
+        #    print v, d.analog_input(0, False, True, (8,9,8,9), (0,0,0,0))[3]
 
         # d.close()
