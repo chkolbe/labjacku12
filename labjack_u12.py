@@ -307,13 +307,13 @@ if __name__ == "__main__":
         d.output(ao0=1, ao1=2, set_ao=True)
         chans, gains, scans = (8,9,8,9), (1,1,10,10), 1024
         a = time.time()
-        d.stream(channels=chans, gains=gains, rate=430)
-        #d.burst(channels=chans, gains=gains, num_scans=scans, rate=2048)
+        #d.stream(channels=chans, gains=gains, rate=430)
+        d.burst(channels=chans, gains=gains, num_scans=scans, rate=2048)
         for i in range(scans/16):
             # time.sleep(0.04)
             for v in d.bulk_read(chans, gains):
-                #pass 
-                print v #v[1]
+                pass 
+                #print v #v[1]
         d.bulk_stop()
         print scans/(time.time()-a)
 
