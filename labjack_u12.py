@@ -70,7 +70,8 @@ class LabjackU12(object):
             pass
     
     def __del__(self):
-        self.close()
+        if hasattr(self, "handle"):
+            self.close()
 
     def close(self):
         self.handle.releaseInterface()
@@ -166,7 +167,7 @@ class LabjackU12(object):
         assert not r[0] & (1 << 7)
         state_d = (r[1] << 8) + r[2]
         state_io = r[3] >> 4
-        count = sum((v << i*8) for i,v in enumerate(r[4::-1]))
+        count = sum((v << i*8) for i,v in enumerate(r[:3:-1]))
         return state_d, state_io, count
 
     gains = [1, 2, 4, 5, 8, 10, 16, 20]
@@ -240,7 +241,7 @@ class LabjackU12(object):
                 ((r[5] & 0x0f) << 8) + r[7])
         volts = [self.bits_to_volts(c, g, self.apply_calibration(c, g, v))
                 for c, g, v in zip(channels, gains, bits)]
-        count = sum(v<<i*8 for i,v in enumerate(r[4::-1]))
+        count = sum(v<<i*8 for i,v in enumerate(r[:3:-1]))
         return (volts, state_io, count, overvoltage, ofchecksum, 
                 iterations, backlog)
 
@@ -271,28 +272,28 @@ class LabjackU12(object):
         self.read_mem(0)
 
     def count(self, reset=False, strobe=False):
-        w = (reset & 1 | strobe & 2, 0, 0, 0, 0, 82, 0, 0)
+        w = ((reset & 1) | (strobe & 2), 0, 0, 0, 0, 82, 0, 0)
         a = time.time()
         r = self.writeread(w, 20)
         t = (time.time()+a)/2.
-        count = sum((v << i*8) for i,v in enumerate(r[4::-1]))
-        return count, t 
+        count = sum((v << i*8) for i,v in enumerate(r[:3:-1]))
+        return count, t
 
     def pulse(self, t1, t2, lines, num_pulses, clear_first=False):
         assert 0x0 <= lines <= 0xf
         assert 1 <= num_pulses < 0xa000
         y1, y2 = t1*6e6-100, t2*6e6-100
-        print y1, y2
         assert 126 <= y1 <= 5*255+121*255*255
         assert 126 <= y2 <= 5*255+121*255*255
-        c1, c2 = int(y1/121), int(y2/121)
-        b1 = int(round((y1 - 5*c)/(121*c)))
-        b2 = int(round((y2 - 5*c)/(121*c)))
+        c1, c2 = max(1,int(y1/121/256)), max(1,int(y2/121/256))
+        b1 = max(1,int(round((y1 - 5*c1)/(121*c1))))
+        b2 = max(1,int(round((y2 - 5*c2)/(121*c2))))
+        t1, t2 = (100+5*c1+121*b1*c1)/6e6, (100+5*c2+121*b2*c2)/6e6
         w = (b1, c1, b2, c2, lines, 0x64, (clear_first << 7) | 
                 (num_pulses >> 8), (num_pulses & 0xff))
-        r = self.writeread(w, 20+1e3*(t1+t2)*num_pulses)
+        r = self.writeread(w, int(20+1e3*(t1+t2)*num_pulses))
         errmask = r[4]
-        return errmask
+        return errmask, t1, t2
 
 if __name__ == "__main__":
     for d in LabjackU12.find_all():
@@ -300,10 +301,11 @@ if __name__ == "__main__":
         # d.open()
         # print d.reset()
         # print np.array([d.read_mem(i) for i in range(0, 8188, 4)])
-        #print d.serial()
-        #print d.local_id()
-        #print d.calibration()
-        #print d.firmware_version()
+        print d.serial()
+        print d.local_id()
+        print d.calibration()
+        print d.firmware_version()
+
         d.output(ao0=1, ao1=2, set_ao=True)
         chans, gains, scans = (8,9,8,9), (1,1,10,10), 1024
         a = time.time()
@@ -319,9 +321,12 @@ if __name__ == "__main__":
 
         print d.input((0,1,2,3), (1,1,1,1)) # 16ms
         print d.input((8,9,10,11), (10,10,10,10)) # 16ms
-        #print d.count(True), d.count(False)
-        #for v in np.arange(0, 5.0001, .1):
-        #    d.analog_output(ao0=v, ao1=v)
-        #    print v, d.input((8,9,8,9), (0,0,0,0))[3]
 
-        # d.close()
+        print d.count(True), d.count(False)
+        for v in np.arange(0, 5.0001, 1):
+            d.output(ao0=v, ao1=v, set_ao=True)
+            print v, d.input((0,1,2,3), (1,1,1,1))[0]
+
+        print d.pulse(.1231, .0002063, lines=0xf, num_pulses=100)
+
+        d.close()
