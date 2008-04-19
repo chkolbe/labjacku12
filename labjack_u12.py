@@ -93,6 +93,7 @@ class LabjackU12(object):
                 self.ep_in.address, siz, tmo)
 
     def writeread(self, w, tmo=20, wtmo=20):
+        assert len(w) == 8
         assert self.write(w, wtmo) == 8
         r = self.read(8, tmo)
         return tuple(v&0xff for v in r)
@@ -120,7 +121,7 @@ class LabjackU12(object):
     def calibration(self):
         a = np.array([self.read_mem(0x100+(0x010*j)) for j in range(8)])
         b = np.array([self.read_mem(0x180+(0x010*j)) for j in range(4)])
-        return np.concatenate((a[:,1], a[:,3], b[:,1]))
+        return list(np.concatenate((a[:,1], a[:,3], b[:,1])))
 
     def local_id(self):
         return self.read_mem(8)[3]
@@ -295,7 +296,7 @@ class LabjackU12(object):
         errmask = r[4]
         return errmask, t1, t2
 
-if __name__ == "__main__":
+def main():
     for d in LabjackU12.find_all():
         #print d
         # d.open()
@@ -309,7 +310,7 @@ if __name__ == "__main__":
         d.output(ao0=1, ao1=2, set_ao=True)
         chans, gains, scans = (8,9,8,9), (1,1,10,10), 1024
         a = time.time()
-        #d.stream(channels=chans, gains=gains, rate=430)
+        #d.stream(channels=chans, gains=gains, rate=420)
         d.burst(channels=chans, gains=gains, num_scans=scans, rate=2048)
         for i in range(scans/16):
             # time.sleep(0.04)
@@ -330,3 +331,6 @@ if __name__ == "__main__":
         print d.pulse(.1231, .0002063, lines=0xf, num_pulses=100)
 
         d.close()
+
+if __name__ == "__main__":
+    main()
