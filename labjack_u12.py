@@ -83,16 +83,16 @@ class LabjackU12(object):
             value=(0x03<<8)+0x00, index=0, buffer=128, 
             timeout=5000)
 
-    def write(self, buf, tmo=100):
+    def write(self, buf, tmo=20):
         return self.handle.interruptWrite(
                 self.ep_out.address, buf, tmo)
 
-    def read(self, siz, tmo=100):
+    def read(self, siz, tmo=20):
         return self.handle.interruptRead(
                 self.ep_in.address, siz, tmo)
 
-    def writeread(self, w, tmo=100):
-        assert self.write(w, tmo) == 8
+    def writeread(self, w, tmo=20, wtmo=20):
+        assert self.write(w, wtmo) == 8
         r = self.read(8, tmo)
         return tuple(v&0xff for v in r)
 
@@ -103,6 +103,14 @@ class LabjackU12(object):
         assert r[0] == 80
         assert w[6:] == r[6:]
         return r[1:5]
+
+    def write_mem(self, ad, val):
+        assert ad >= 0 & ad <= 8188
+        assert len(val) == 4
+        w = tuple(val) + (0,81) + divmod(ad, 0x100)
+        r = self.writeread(w)
+        assert r[0] == 81
+        assert w[6:] == r[6:]
 
     def serial(self):
         r = self.read_mem(0)
@@ -118,34 +126,20 @@ class LabjackU12(object):
 
     def reset(self):
         return self.write((0,0,0,0, 0,95,0,0))
+        # no response
 
     def reenumerate(self):
         return self.write((0,0,0,0, 0,64,0,0))
+        # no response
 
     def firmware_version(self):
         r = self.writeread((1,0,0,0, 0,83,0,0))
         return r[0]+r[1]/100.
 
-    def digital_io(self, conf_d, conf_io, state_d, state_io, update_digital):
-        assert 0 <= conf_d <= 0xffff
-        assert 0 <= conf_io <= 0xf
-        conf_d ^= 0xffff
-        conf_io ^= 0xf
-        assert 0 <= state_d <= 0xffff
-        assert 0 <= state_io <= 0xf
-
-        w = divmod(conf_d, 0x100) + divmod(state_d, 0x100) + (
-            (conf_io << 4) | state_io, 87, update_digital, 0)
-        print w
-        r = self.writeread(w, tmo=1000)
-        
-        assert r[0] == 87 or r[0] == 119
-        state_d = (r[1] << 8) + r[2]
-        state_io = r[3] >> 4
-        return state_d, state_io
-
-    def analog_output(self, conf_d, conf_io, state_d, state_io, ao0, ao1,
-            set_d, reset_c):
+    def output(self, conf_d=0x0000, conf_io=0x0,
+            state_d=0x0000, state_io=0x0,
+            ao0=0., ao1=0., set_ao=True,
+            set_d=False, reset_c=False):
         assert 0 <= conf_d <= 0xffff
         assert 0 <= conf_io <= 0xf
         conf_d ^= 0xffff
@@ -157,14 +151,18 @@ class LabjackU12(object):
         ao0 = int(round(ao0/5.*1023))
         ao1 = int(round(ao1/5.*1023))
 
-        w = divmod(conf_d, 0x100) + divmod(state_d, 0x100) + (
-            (conf_io << 4) | state_io,
-            (set_d << 4) | (reset_c << 5) | ((ao0 & 0x3) << 2) 
-                | ((ao1 & 0x3) << 0),
-            ao0 >> 2, ao1 >> 2)
-        # print w
-        r = self.writeread(w, tmo=1000)
+        w = list(divmod(conf_d, 0x100)) + \
+            list(divmod(state_d, 0x100)) + \
+            [(conf_io << 4) | state_io, 0,
+                ao0 >> 2, ao1 >> 2]
+        if set_ao:
+            w[5] = ((set_d << 4) | (reset_c << 5) | 
+                    ((ao0 & 0x3) << 2) | ((ao1 & 0x3) << 0))
+        else:
+            w[5] = 87
 
+        r = self.writeread(w, tmo=20)
+        
         assert not r[0] & (1 << 7)
         state_d = (r[1] << 8) + r[2]
         state_io = r[3] >> 4
@@ -172,7 +170,9 @@ class LabjackU12(object):
         return state_d, state_io, count
 
     gains = [1, 2, 4, 5, 8, 10, 16, 20]
+
     def mux_cmd(self, ch, g):
+        g = int(round(g))
         assert g in self.gains
         assert (ch >= 8) | (g == 1)
         return (self.gains.index(g) << 4) | (ch^0x8)
@@ -183,7 +183,7 @@ class LabjackU12(object):
             off = self.caldata[ch]
             v -= off
             gaincal = self.caldata[ch + 8]
-            v += (v-2048) / 512. * (off-gaincal)
+            v += (v-0x800)/512. * (off-gaincal)
         else:
             ch &= 0x3
             czse = self.caldata[2*ch] - self.caldata[2*ch+1]
@@ -192,16 +192,16 @@ class LabjackU12(object):
             ccdiff = (self.caldata[2*ch+8]-self.caldata[2*ch]) - \
                     (self.caldata[2*ch+9]-self.caldata[2*ch+1])
             if ccdiff >= 2:
-                v -= (v-2048)/256.
+                v -= (v-0x800)/256.
             elif ccdiff <= -2:
-			    v += (v-2048)/256.
-        return max(min(v, 4095), 0)
+			    v += (v-0x800)/256.
+        return max(min(v, 0x1000-1), 0)
 
     def bits_to_volts(self, ch, g, b):
         if ch < 8:
-            return b*20./4096. - 10.
+            return b*20./0x1000 - 10.
         else:
-            return (b*40./4096. - 20.) / g
+            return (b*40./0x1000 - 20.) / g
 
     def build_ai_command(self, cmd, channels, gains,
             state_io=0x0, set_io=0x0, led=False,
@@ -228,11 +228,12 @@ class LabjackU12(object):
             w[6] |= (feature_reports << 7) | (trigger_on << 6)
         return w
 
-    def parse_ai_command(self, r, channels, gains):
+    def parse_ai_response(self, r, channels, gains):
         assert r[0] & (1 << 7)
         ofchecksum, overvoltage = bool(r[0] & (1<<5)), bool(r[0] & (1<<4))
         state_io = r[0] & 0xf
         iterations = r[1] >> 5
+        backlog = r[1] & 0x1f
         bits = (((r[2] & 0xf0) << 4) + r[3],
                 ((r[2] & 0x0f) << 8) + r[4],
                 ((r[5] & 0xf0) << 4) + r[6],
@@ -240,21 +241,23 @@ class LabjackU12(object):
         volts = [self.bits_to_volts(c, g, self.apply_calibration(c, g, v))
                 for c, g, v in zip(channels, gains, bits)]
         count = sum(v<<i*8 for i,v in enumerate(r[4::-1]))
-        return overvoltage, ofchecksum, state_io, volts, iterations, count
+        return (volts, state_io, count, overvoltage, ofchecksum, 
+                iterations, backlog)
 
-    def analog_input(self, **kwargs):
+    def input(self, channels, gains, **kwargs):
         challenge = ord(np.random.bytes(1))
-        w = self.build_ai_command(cmd=4, **kwargs)
+        w = self.build_ai_command(cmd=4, channels=channels, gains=gains,
+                **kwargs)
         w[7] = challenge
-        r = self.writeread(w, 1000)
+        r = self.writeread(w, 20)
         assert r[1] == challenge
-        return self.parse_ai_command(w)
+        return self.parse_ai_response(r, channels, gains)
 
-    def stream_start(self, **kwargs):
+    def stream(self, **kwargs):
         w = self.build_ai_command(cmd=1, **kwargs)
         self.write(w)
 
-    def burst_start(self, **kwargs):
+    def burst(self, **kwargs):
         w = self.build_ai_command(cmd=2, **kwargs)
         self.write(w)
    
@@ -262,18 +265,34 @@ class LabjackU12(object):
         resp = self.feature_read()
         while len(resp) >= 8:
             r, resp = resp[:8], resp[8:]
-            yield self.parse_ai_command(r, channels, gains)
+            yield self.parse_ai_response(r, channels, gains)
         
     def bulk_stop(self):
         self.read_mem(0)
 
-    def count(self, reset):
-        w = (reset & 1 | 0, 0, 0, 0, 82, 0, 0, 0)
+    def count(self, reset=False, strobe=False):
+        w = (reset & 1 | strobe & 2, 0, 0, 0, 0, 82, 0, 0)
         a = time.time()
-        r = self.writeread(w, 100)
+        r = self.writeread(w, 20)
         t = (time.time()+a)/2.
         count = sum((v << i*8) for i,v in enumerate(r[4::-1]))
         return count, t 
+
+    def pulse(self, t1, t2, lines, num_pulses, clear_first=False):
+        assert 0x0 <= lines <= 0xf
+        assert 1 <= num_pulses < 0xa000
+        y1, y2 = t1*6e6-100, t2*6e6-100
+        print y1, y2
+        assert 126 <= y1 <= 5*255+121*255*255
+        assert 126 <= y2 <= 5*255+121*255*255
+        c1, c2 = int(y1/121), int(y2/121)
+        b1 = int(round((y1 - 5*c)/(121*c)))
+        b2 = int(round((y2 - 5*c)/(121*c)))
+        w = (b1, c1, b2, c2, lines, 0x64, (clear_first << 7) | 
+                (num_pulses >> 8), (num_pulses & 0xff))
+        r = self.writeread(w, 20+1e3*(t1+t2)*num_pulses)
+        errmask = r[4]
+        return errmask
 
 if __name__ == "__main__":
     for d in LabjackU12.find_all():
@@ -285,25 +304,24 @@ if __name__ == "__main__":
         #print d.local_id()
         #print d.calibration()
         #print d.firmware_version()
-        #print d.e_analog_input((0,1,2,3))
-        d.analog_output(0, 0, 0, 0, 1, 2, False, False) # 16ms
-        #print d.digital_io(0,0,0,0,1)
+        d.output(ao0=1, ao1=2, set_ao=True)
         chans, gains, scans = (8,9,8,9), (1,1,10,10), 1024
         a = time.time()
-        #d.stream_start(channels=chans, gains=gains, rate=400)
-        d.burst_start(channels=chans, gains=gains, num_scans=scans, rate=2048)
+        d.stream(channels=chans, gains=gains, rate=430)
+        #d.burst(channels=chans, gains=gains, num_scans=scans, rate=2048)
         for i in range(scans/16):
+            # time.sleep(0.04)
             for v in d.bulk_read(chans, gains):
-                pass 
-                #print v #v[3]
+                #pass 
+                print v #v[1]
         d.bulk_stop()
         print scans/(time.time()-a)
 
-        #print d.analog_input(0, False, True, (0,1,2,3), (1,1,1,1)) # 16ms
-        #print d.analog_input(0, False, True, (8,9,10,11), (1,1,1,1)) # 16ms
+        print d.input((0,1,2,3), (1,1,1,1)) # 16ms
+        print d.input((8,9,10,11), (10,10,10,10)) # 16ms
         #print d.count(True), d.count(False)
         #for v in np.arange(0, 5.0001, .1):
-        #    d.analog_output(0, 0, 0, 0, v, v, False, False)
-        #    print v, d.analog_input(0, False, True, (8,9,8,9), (0,0,0,0))[3]
+        #    d.analog_output(ao0=v, ao1=v)
+        #    print v, d.input((8,9,8,9), (0,0,0,0))[3]
 
         # d.close()
