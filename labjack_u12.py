@@ -19,8 +19,6 @@
 # Boston, MA 02110-1301, USA.
 
 import usb, time, random, math
-#import numpy as np
-
 
 class LabjackU12(object):
     id_vendor = 0x0cd5
@@ -317,6 +315,7 @@ class LabjackU12(object):
         return errmask, t1, t2
 
 def main():
+    #import numpy as np
     for d in LabjackU12.find_all():
         # print d
         # print d.reset()
@@ -339,15 +338,16 @@ def main():
         d.bulk_stop()
         print scans/(time.time()-a)
 
-        print d.input((0,1,2,3), (1,1,1,1)) # 16ms
-        print d.input((8,9,10,11), (10,10,10,10)) # 16ms
+        print d.input(channels=(0,1,2,3), gains=(1,1,1,1)) # 16ms
+        print d.input(channels=(8,9,10,11), gains=(10,10,10,10)) # 16ms
 
-        print d.count(True), d.count(False)
+        print d.count(reset=True), d.count(reset=False)
         for v in range(0, 6, 1):
             d.output(ao0=v, ao1=v, set_ao=True)
-            print v, d.input((0,1,2,3), (1,1,1,1))[0]
+            print v, d.input(channels=(0,1,2,3), gains=(1,1,1,1))[0]
 
-        print d.pulse(.1231, .0002063, lines=0xf, num_pulses=100)
+        print d.pulse(t1=.1231, t2=.0002063, lines=0xf,
+                num_pulses=100)
 
         del d
 
