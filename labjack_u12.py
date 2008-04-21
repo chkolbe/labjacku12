@@ -79,12 +79,12 @@ class LabjackU12(object):
         self.handle.releaseInterface()
         del self.handle
 
-    def feature_read(self):
+    def feature_read(self, tmo=5000):
         return self.handle.controlMsg(
             requestType=usb.TYPE_CLASS|usb.RECIP_INTERFACE|usb.ENDPOINT_IN,
             request=usb.REQ_CLEAR_FEATURE,
             value=(0x03<<8)+0x00, index=0, buffer=128, 
-            timeout=5000)
+            timeout=tmo)
 
     def write(self, buf, tmo=20):
         return self.handle.interruptWrite(
@@ -155,36 +155,39 @@ class LabjackU12(object):
     state_io = 0x0
 
     # analog outputs
-    ao0 = 0.
-    ao1 = 0.
+    ao0 = 0
+    ao1 = 0
 
-    # analog inputs
-    channels = (0,0,0,0) # selected channels
-    gains = (1,1,1,1) # for the differential ones only
-
-    def output(self, conf_d=0x0000, conf_io=0x0,
-            state_d=0x0000, state_io=0x0,
+    def output(self, conf_d=None, conf_io=None,
+            state_d=None, state_io=None,
             set_d_io=False, 
             ao0=0., ao1=0., set_ao=False,
             reset_c=False):
-        assert 0 <= conf_d <= 0xffff
-        assert 0 <= conf_io <= 0xf
-        conf_d ^= 0xffff
-        conf_io ^= 0xf
-        assert 0 <= state_d <= 0xffff
-        assert 0 <= state_io <= 0xf
-        assert 0 <= ao0 <= 5
-        assert 0 <= ao1 <= 5
-        ao0 = int(round(ao0/5.*1023))
-        ao1 = int(round(ao1/5.*1023))
+        if conf_d is not None:
+            assert 0 <= conf_d <= 0xffff
+            self.conf_d = conf_d
+        if conf_io is not None:
+            assert 0 <= conf_io <= 0xf
+            self.conf_io = conf_io
+        if state_d is not None:
+            assert 0 <= state_d <= 0xffff
+            self.state_d = state_d
+        if state_io is not None:
+            assert 0 <= state_io <= 0xf
+            self.state_io = state_io
+        if set_ao:
+            assert 0 <= ao0 <= 5
+            assert 0 <= ao1 <= 5
+            self.ao0 = int(round(ao0/5.*1023))
+            self.ao1 = int(round(ao1/5.*1023))
 
-        w = list(divmod(conf_d, 0x100)) + \
-            list(divmod(state_d, 0x100)) + \
-            [(conf_io << 4) | state_io, 0,
-                ao0 >> 2, ao1 >> 2]
+        w = list(divmod(self.conf_d^0xffff, 0x100)) + \
+            list(divmod(self.state_d, 0x100)) + \
+            [((self.conf_io^0xf) << 4) | self.state_io, 0,
+                self.ao0 >> 2, self.ao1 >> 2]
         if set_ao:
             w[5] = ((set_d_io << 4) | (reset_c << 5) | 
-                    ((ao0 & 0x3) << 2) | ((ao1 & 0x3) << 0))
+                    ((self.ao0 & 0x3) << 2) | ((self.ao1 & 0x3) << 0))
         else:
             w[5] = 0x57
             w[6] = (set_d_io << 0)
@@ -200,9 +203,8 @@ class LabjackU12(object):
     gains = [1, 2, 4, 5, 8, 10, 16, 20]
 
     def mux_cmd(self, ch, g):
-        g = int(round(g))
-        assert g in self.gains
         assert (ch >= 8) | (g == 1)
+        assert g in self.gains
         return (self.gains.index(g) << 4) | (ch^0x8)
 
     def apply_calibration(self, ch, g, v):
@@ -238,19 +240,22 @@ class LabjackU12(object):
             trigger=0, trigger_state=False):
         assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
         assert len(channels) == len(gains)
-        assert 0 <= state_io <= 0xf
+        if set_io:
+            assert 0 <= state_io <= 0xf
+            self.state_io = state_io
         sample_int = int(round(self.clock/rate/4.))
         if sample_int == 732:
             sample_int = 733
-        assert 733 <= sample_int < (1<<14)
+        assert 733 <= sample_int <= 0xffff
         challenge = random.randint(0,0xff)
         w = [self.mux_cmd(ch, g) for ch, g in zip(channels, gains)] + \
             [(led << 0) | (set_io << 1),
-                 (1<<7) | (state_io << 0) | (cmd << 4)] + \
+                 (1<<7) | (self.state_io << 0) | (cmd << 4)] + \
             list(divmod(sample_int, 1<<8))
         if cmd == 1: # stream
             w[4] |= (feature_reports << 7) | (read_counter << 6)
         elif cmd == 2: # burst
+            assert sample_int < (1<<14)
             w[4] |= ((int(10-math.ceil(math.log(num_scans, 2))) << 5) | 
                         (trigger_state << 2) | ((trigger & 0x3) << 3))
             w[6] |= (feature_reports << 7) | (bool(trigger) << 6)
@@ -289,14 +294,34 @@ class LabjackU12(object):
         w = self.build_ai_command(cmd=2, **kwargs)
         self.write(w)
    
-    def bulk_read(self, channels, gains):
-        resp = self.feature_read()
+    def bulk_read(self, channels, gains, **kwargs):
+        resp = self.feature_read(**kwargs)
         while len(resp) >= 8:
             r, resp = resp[:8], resp[8:]
             yield self.parse_ai_response(r, channels, gains)
         
     def bulk_stop(self):
         self.read_mem(0)
+
+    def stream_sync(self, channels, gains, num_scans, rate, **kwargs):
+        self.stream(channels=channels, gains=gains,
+                rate=rate, **kwargs)
+        for i in range(int(math.ceil(num_scans/16.))):
+            for v in self.bulk_read(channels, gains,
+                    tmo=20+16*1000/rate):
+                yield v
+        self.bulk_stop()
+
+    def burst_sync(self, channels, gains, num_scans, rate,
+            trigger_timeout=3, **kwargs):
+        self.burst(channels=channels, gains=gains,
+                num_scans=num_scans, rate=rate, **kwargs)
+        time.sleep(num_scans/float(rate)-.02)
+        for i in range(int(math.ceil(num_scans/16.))):
+            for v in self.bulk_read(channels, gains,
+                    tmo=20+(i==0)*trigger_timeout*1000):
+                yield v
+        self.bulk_stop()
 
     def count(self, reset=False, strobe=False):
         w = ((reset & 1) | (strobe & 2), 0, 0, 0, 0, 82, 0, 0)
@@ -337,25 +362,21 @@ def main():
         d.output(ao0=.6234, ao1=.6234, set_ao=True)
         chans, gains, scans = (8,8,8,8), (1,5,10,20), 1024
         a = time.time()
-        #d.stream(channels=chans, gains=gains, rate=420)
-        d.burst(channels=chans, gains=gains, num_scans=scans, rate=2048,
-                led=True)
-        for i in range(scans/16):
-            # time.sleep(0.04)
-            for v in d.bulk_read(chans, gains):
+        #for v in d.stream_sync(channels=chans, gains=gains, 
+        #        num_scans=scans, rate=430):
+        for v in d.burst_sync(channels=chans, gains=gains,
+                num_scans=scans, rate=2048):
                 print v[0]
-                #print v #v[1]
-                pass 
-        d.bulk_stop()
+                # pass 
         print scans/(time.time()-a)
 
         #print d.input(channels=(0,1,2,3), gains=(1,1,1,1)) # 16ms
         #print d.input(channels=(8,9,10,11), gains=(10,10,10,10)) # 16ms
 
         #print d.count(reset=True), d.count(reset=False)
-        #for v in range(0, 6, 1):
-        #    d.output(ao0=v, ao1=v, set_ao=True)
-        #    print v, d.input(channels=(0,1,2,3), gains=(1,1,1,1))[0]
+        for v in range(0, 6, 1):
+            d.output(ao0=v, ao1=v, set_ao=True)
+            print v, d.input(channels=(8,8,9,9), gains=(1,4,1,4))[0]
 
         #print d.pulse(t1=.1231, t2=.0002063, lines=0xf,
         #        num_pulses=100)
