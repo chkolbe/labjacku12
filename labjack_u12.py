@@ -18,8 +18,8 @@
 # the Free Software Foundation, Inc., 51 Franklin Street,
 # Boston, MA 02110-1301, USA.
 
-import usb, time, random
-import numpy as np
+import usb, time, random, math
+#import numpy as np
 
 
 class LabjackU12(object):
@@ -123,9 +123,9 @@ class LabjackU12(object):
         return sum(ri << 8*i for i, ri in enumerate(r[::-1]))
 
     def calibration(self):
-        a = np.array([self.read_mem(0x100+(0x010*j)) for j in range(8)])
-        b = np.array([self.read_mem(0x180+(0x010*j)) for j in range(4)])
-        return list(np.concatenate((a[:,1], a[:,3], b[:,1])))
+        a = [self.read_mem(0x100+(0x010*j)) for j in range(8)]
+        b = [self.read_mem(0x180+(0x010*j)) for j in range(4)]
+        return [i[1] for i in a] + [i[3] for i in a] + [i[1] for i in b]
 
     def local_id(self):
         return self.read_mem(8)[3]
@@ -237,7 +237,7 @@ class LabjackU12(object):
         if sample_int == 732:
             sample_int = 733
         assert 733 <= sample_int < (1<<14)
-        challenge = ord(np.random.bytes(1))
+        challenge = random.randint(0,0xff)
         w = [self.mux_cmd(ch, g) for ch, g in zip(channels, gains)] + \
             [(led << 0) | (set_io << 1),
                  (1<<7) | (state_io << 0) | (cmd << 4)] + \
@@ -245,7 +245,7 @@ class LabjackU12(object):
         if cmd == 1: # stream
             w[4] |= (feature_reports << 7) | (read_counter << 6)
         elif cmd == 2: # burst
-            w[4] |= ((int(10-np.ceil(np.log2(num_scans))) << 5) | 
+            w[4] |= ((int(10-math.ceil(math.log(num_scans, 2))) << 5) | 
                         (trigger_state << 2) | (trigger << 3))
             w[6] |= (feature_reports << 7) | (trigger_on << 6)
         return w
@@ -267,7 +267,7 @@ class LabjackU12(object):
                 iterations, backlog)
 
     def input(self, channels, gains, **kwargs):
-        challenge = ord(np.random.bytes(1))
+        challenge = random.randint(0,0xff)
         w = self.build_ai_command(cmd=4, channels=channels, gains=gains,
                 **kwargs)
         w[7] = challenge
@@ -320,7 +320,7 @@ def main():
     for d in LabjackU12.find_all():
         # print d
         # print d.reset()
-        # print np.array([d.read_mem(i) for i in range(0, 8188, 4)])
+        # print [d.read_mem(i) for i in range(0, 8188, 4)]
         print d.serial()
         print d.local_id()
         print d.calibration()
@@ -343,7 +343,7 @@ def main():
         print d.input((8,9,10,11), (10,10,10,10)) # 16ms
 
         print d.count(True), d.count(False)
-        for v in np.arange(0, 5.0001, 1):
+        for v in range(0, 6, 1):
             d.output(ao0=v, ao1=v, set_ao=True)
             print v, d.input((0,1,2,3), (1,1,1,1))[0]
 
