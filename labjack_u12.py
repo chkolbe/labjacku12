@@ -41,6 +41,10 @@ class LabjackU12(object):
         self.open()
         self.init_read()
         self.caldata = self.calibration()
+        # self.id = self.local_id()
+        # self.vers = d.firmware_version()
+        # assert self.vers >= 1.11
+        # self.ser = self.serial()
 
     def open(self):
         self.handle = self.dev.open()
@@ -137,6 +141,22 @@ class LabjackU12(object):
     def firmware_version(self):
         r = self.writeread((1,0,0,0, 0,83,0,0))
         return r[0]+r[1]/100.
+
+    # digital lines on the SubD25
+    conf_d = 0x0000
+    state_d = 0x0000
+
+    # the four main terminal digital ones
+    conf_io = 0x0
+    state_io = 0x0
+
+    # analog outputs
+    ao0 = 0.
+    ao1 = 0.
+
+    # analog inputs
+    channels = (0,0,0,0) # selected channels
+    gains = (1,1,1,1) # for the differential ones only
 
     def output(self, conf_d=0x0000, conf_io=0x0,
             state_d=0x0000, state_io=0x0,
@@ -292,14 +312,13 @@ class LabjackU12(object):
         t1, t2 = (100+5*c1+121*b1*c1)/6e6, (100+5*c2+121*b2*c2)/6e6
         w = (b1, c1, b2, c2, lines, 0x64, (clear_first << 7) | 
                 (num_pulses >> 8), (num_pulses & 0xff))
-        r = self.writeread(w, int(20+1e3*(t1+t2)*num_pulses))
+        r = self.writeread(w, 20) #int(20+1e3*(t1+t2)*num_pulses))
         errmask = r[4]
         return errmask, t1, t2
 
 def main():
     for d in LabjackU12.find_all():
-        #print d
-        # d.open()
+        # print d
         # print d.reset()
         # print np.array([d.read_mem(i) for i in range(0, 8188, 4)])
         print d.serial()
@@ -330,7 +349,7 @@ def main():
 
         print d.pulse(.1231, .0002063, lines=0xf, num_pulses=100)
 
-        d.close()
+        del d
 
 if __name__ == "__main__":
     main()
