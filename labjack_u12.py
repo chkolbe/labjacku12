@@ -104,14 +104,14 @@ class LabjackU12(object):
 
     def read_mem(self, ad):
         assert ad >= 0 & ad <= 8188
-        w = (0,0,0,0,0,80) + divmod(ad, 0x100)
+        w = (0,0,0,0,0,0x50) + divmod(ad, 0x100)
         r = self.writeread(w)
-        assert r[0] == 80
+        assert r[0] == 0x50
         assert w[6:] == r[6:]
         return r[1:5]
 
     def write_mem(self, ad, val):
-        assert ad >= 0 & ad <= 8188
+        assert ad >= 0 & ad <= 0x1ffc
         assert len(val) == 4
         w = tuple(val) + (0,81) + divmod(ad, 0x100)
         r = self.writeread(w)
@@ -131,15 +131,15 @@ class LabjackU12(object):
         return self.read_mem(8)[3]
 
     def reset(self):
-        return self.write((0,0,0,0, 0,95,0,0))
+        return self.write((0,0,0,0, 0,0x5f,0,0))
         # no response
 
     def reenumerate(self):
-        return self.write((0,0,0,0, 0,64,0,0))
+        return self.write((0,0,0,0, 0,0x40,0,0))
         # no response
 
     def firmware_version(self):
-        r = self.writeread((1,0,0,0, 0,83,0,0))
+        r = self.writeread((1,0,0,0, 0,0x53,0,0))
         return r[0]+r[1]/100.
 
     # digital lines on the SubD25
@@ -159,9 +159,9 @@ class LabjackU12(object):
     gains = (1,1,1,1) # for the differential ones only
 
     def output(self, conf_d=0x0000, conf_io=0x0,
-            state_d=0x0000, state_io=0x0,
-            ao0=0., ao1=0., set_ao=True,
-            set_d=False, reset_c=False):
+            state_d=0x0000, state_io=0x0, set_d_io=False, 
+            ao0=0., ao1=0., set_ao=False,
+            reset_c=False):
         assert 0 <= conf_d <= 0xffff
         assert 0 <= conf_io <= 0xf
         conf_d ^= 0xffff
@@ -178,10 +178,10 @@ class LabjackU12(object):
             [(conf_io << 4) | state_io, 0,
                 ao0 >> 2, ao1 >> 2]
         if set_ao:
-            w[5] = ((set_d << 4) | (reset_c << 5) | 
+            w[5] = ((set_d_io << 4) | (reset_c << 5) | 
                     ((ao0 & 0x3) << 2) | ((ao1 & 0x3) << 0))
         else:
-            w[5] = 87
+            w[5] = 0x57
 
         r = self.writeread(w, tmo=20)
         
@@ -226,7 +226,7 @@ class LabjackU12(object):
             return (b*40./0x1000 - 20.) / g
 
     def build_ai_command(self, cmd, channels, gains,
-            state_io=0x0, set_io=0x0, led=False,
+            state_io=0x0, set_io=False, led=False,
             rate=1200, feature_reports=True, read_counter=False,
             num_scans=1024,
             trigger=0, trigger_state=False, trigger_on=True):
