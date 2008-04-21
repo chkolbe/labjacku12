@@ -369,9 +369,6 @@ def main():
                 print v[0]
                 # pass 
         print scans/(time.time()-a)
-        l = d.burst_sync(channels=chans, gains=gains, num_scans=scans, rate=2048)
-        l += d.burst_sync(channels=chans, gains=gains, num_scans=scans, rate=2048)
-        l += d.burst_sync(channels=chans, gains=gains, num_scans=scans, rate=2048)
 
         #print d.input(channels=(0,1,2,3), gains=(1,1,1,1)) # 16ms
         #print d.input(channels=(8,9,10,11), gains=(10,10,10,10)) # 16ms
