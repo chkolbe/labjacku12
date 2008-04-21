@@ -140,6 +140,12 @@ class LabjackU12(object):
         r = self.writeread((1,0,0,0, 0,0x53,0,0))
         return r[0]+r[1]/100.
 
+    # general properties
+
+    clock = 6e6
+
+    # State management
+
     # digital lines on the SubD25
     conf_d = 0x0000
     state_d = 0x0000
@@ -231,7 +237,7 @@ class LabjackU12(object):
         assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
         assert len(channels) == len(gains)
         assert 0 <= state_io <= 0xf
-        sample_int = int(round(6e6/rate/4.))
+        sample_int = int(round(self.clock/rate/4.))
         if sample_int == 732:
             sample_int = 733
         assert 733 <= sample_int < (1<<14)
@@ -301,13 +307,14 @@ class LabjackU12(object):
     def pulse(self, t1, t2, lines, num_pulses, clear_first=False):
         assert 0x0 <= lines <= 0xf
         assert 1 <= num_pulses < 0xa000
-        y1, y2 = t1*6e6-100, t2*6e6-100
+        y1, y2 = t1*self.clock-100, t2*self.clock-100
         assert 126 <= y1 <= 5*255+121*255*255
         assert 126 <= y2 <= 5*255+121*255*255
         c1, c2 = max(1,int(y1/121/256)), max(1,int(y2/121/256))
         b1 = max(1,int(round((y1 - 5*c1)/(121*c1))))
         b2 = max(1,int(round((y2 - 5*c2)/(121*c2))))
-        t1, t2 = (100+5*c1+121*b1*c1)/6e6, (100+5*c2+121*b2*c2)/6e6
+        t1 = (100+5*c1+121*b1*c1)/self.clock
+        t2 = (100+5*c2+121*b2*c2)/self.clock
         w = (b1, c1, b2, c2, lines, 0x64, (clear_first << 7) | 
                 (num_pulses >> 8), (num_pulses & 0xff))
         r = self.writeread(w, 20) #int(20+1e3*(t1+t2)*num_pulses))
