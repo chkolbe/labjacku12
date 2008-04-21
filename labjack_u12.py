@@ -163,7 +163,8 @@ class LabjackU12(object):
     gains = (1,1,1,1) # for the differential ones only
 
     def output(self, conf_d=0x0000, conf_io=0x0,
-            state_d=0x0000, state_io=0x0, set_d_io=False, 
+            state_d=0x0000, state_io=0x0,
+            set_d_io=False, 
             ao0=0., ao1=0., set_ao=False,
             reset_c=False):
         assert 0 <= conf_d <= 0xffff
@@ -186,6 +187,7 @@ class LabjackU12(object):
                     ((ao0 & 0x3) << 2) | ((ao1 & 0x3) << 0))
         else:
             w[5] = 0x57
+            w[6] = (set_d_io << 0)
 
         r = self.writeread(w, tmo=20)
         
@@ -230,10 +232,10 @@ class LabjackU12(object):
             return (b*40./0x1000 - 20.) / g
 
     def build_ai_command(self, cmd, channels, gains,
-            state_io=0x0, set_io=False, led=False,
+            state_io=0x0, set_io=False, led=True,
             rate=1200, feature_reports=True, read_counter=False,
             num_scans=1024,
-            trigger=0, trigger_state=False, trigger_on=True):
+            trigger=0, trigger_state=False):
         assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
         assert len(channels) == len(gains)
         assert 0 <= state_io <= 0xf
@@ -250,8 +252,8 @@ class LabjackU12(object):
             w[4] |= (feature_reports << 7) | (read_counter << 6)
         elif cmd == 2: # burst
             w[4] |= ((int(10-math.ceil(math.log(num_scans, 2))) << 5) | 
-                        (trigger_state << 2) | (trigger << 3))
-            w[6] |= (feature_reports << 7) | (trigger_on << 6)
+                        (trigger_state << 2) | ((trigger & 0x3) << 3))
+            w[6] |= (feature_reports << 7) | (bool(trigger) << 6)
         return w
 
     def parse_ai_response(self, r, channels, gains):
@@ -332,29 +334,31 @@ def main():
         print d.calibration()
         print d.firmware_version()
 
-        d.output(ao0=1, ao1=2, set_ao=True)
-        chans, gains, scans = (8,9,8,9), (1,1,10,10), 1024
+        d.output(ao0=.6234, ao1=.6234, set_ao=True)
+        chans, gains, scans = (8,8,8,8), (1,5,10,20), 1024
         a = time.time()
         #d.stream(channels=chans, gains=gains, rate=420)
-        d.burst(channels=chans, gains=gains, num_scans=scans, rate=2048)
+        d.burst(channels=chans, gains=gains, num_scans=scans, rate=2048,
+                led=True)
         for i in range(scans/16):
             # time.sleep(0.04)
             for v in d.bulk_read(chans, gains):
-                pass 
+                print v[0]
                 #print v #v[1]
+                pass 
         d.bulk_stop()
         print scans/(time.time()-a)
 
-        print d.input(channels=(0,1,2,3), gains=(1,1,1,1)) # 16ms
-        print d.input(channels=(8,9,10,11), gains=(10,10,10,10)) # 16ms
+        #print d.input(channels=(0,1,2,3), gains=(1,1,1,1)) # 16ms
+        #print d.input(channels=(8,9,10,11), gains=(10,10,10,10)) # 16ms
 
-        print d.count(reset=True), d.count(reset=False)
-        for v in range(0, 6, 1):
-            d.output(ao0=v, ao1=v, set_ao=True)
-            print v, d.input(channels=(0,1,2,3), gains=(1,1,1,1))[0]
+        #print d.count(reset=True), d.count(reset=False)
+        #for v in range(0, 6, 1):
+        #    d.output(ao0=v, ao1=v, set_ao=True)
+        #    print v, d.input(channels=(0,1,2,3), gains=(1,1,1,1))[0]
 
-        print d.pulse(t1=.1231, t2=.0002063, lines=0xf,
-                num_pulses=100)
+        #print d.pulse(t1=.1231, t2=.0002063, lines=0xf,
+        #        num_pulses=100)
 
         del d
 
