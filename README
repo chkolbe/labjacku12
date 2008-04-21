@@ -9,8 +9,6 @@ Requirements:
 
 Setup:
   
-  * copy doc/usbhid to /etc/modprobe.d/ to prevent usbhid from grabbing
-    the usb device
   * copy doc/85-usbdev.rules to /etc/udev/rules.d/ and add yourself to
     the plugdev group (adduser yourself plugdev) to be able to access
     the usb devfs device as a regular user

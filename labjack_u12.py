@@ -38,30 +38,27 @@ class LabjackU12(object):
         self.dev = usbdev
         self.open()
         self.init_read()
+        assert self.firmware_version() >= 1.10
         self.caldata = self.calibration()
-        # self.id = self.local_id()
-        # self.vers = d.firmware_version()
-        # assert self.vers >= 1.11
-        # self.ser = self.serial()
 
     def open(self):
         self.handle = self.dev.open()
         # self.handle.reset()
-        self.handle.setConfiguration(1)
-        self.interface = \
-            self.dev.configurations[self.id_configuration
-                    ].interfaces[self.id_interface][0]
+        conf = self.dev.configurations[self.id_configuration]
+        self.interface = conf.interfaces[self.id_interface][0]
+        try:
+            self.handle.detachKernelDriver(self.interface)
+        except usb.USBError:
+            # already detached
+            pass
+        self.handle.setConfiguration(conf)
+        self.handle.claimInterface(self.interface)
         self.ep_in = self.interface.endpoints[0]
         self.ep_out = self.interface.endpoints[1]
         assert self.ep_in.address == 0x81
         assert self.ep_out.address == 0x02
         assert self.ep_in.type == usb.ENDPOINT_TYPE_INTERRUPT
         assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
-        try:
-            self.handle.detachKernelDriver(self.id_interface)
-        except usb.USBError:
-            pass
-        self.handle.claimInterface(self.interface)
 
     def init_read(self):
         assert self.write((0,)*8) == 8
@@ -368,7 +365,7 @@ def main():
                 num_scans=scans, rate=2048):
                 print v[0]
                 # pass 
-        print scans/(time.time()-a)
+        print 4*scans/(time.time()-a)
 
         #print d.input(channels=(0,1,2,3), gains=(1,1,1,1)) # 16ms
         #print d.input(channels=(8,9,10,11), gains=(10,10,10,10)) # 16ms
