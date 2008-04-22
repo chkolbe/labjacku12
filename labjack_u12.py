@@ -250,12 +250,17 @@ class LabjackU12(object):
                  (1<<7) | (self.state_io << 0) | (cmd << 4)] + \
             list(divmod(sample_int, 1<<8))
         if cmd == 1: # stream
+            assert not trigger
             w[4] |= (feature_reports << 7) | (read_counter << 6)
         elif cmd == 2: # burst
             assert sample_int < (1<<14)
+            assert not read_counter
             w[4] |= ((int(10-math.ceil(math.log(num_scans, 2))) << 5) | 
                         (trigger_state << 2) | ((trigger & 0x3) << 3))
             w[6] |= (feature_reports << 7) | (bool(trigger) << 6)
+        elif cmd == 4:
+            assert not read_counter
+            assert not trigger
         return w
 
     def parse_ai_response(self, r, channels, gains):
@@ -360,10 +365,10 @@ def main():
         chans, gains, scans = (8,8,8,8), (1,5,10,20), 1024
         a = time.time()
         #for v in d.stream_sync(channels=chans, gains=gains, 
-        #        num_scans=scans, rate=430):
+        #        num_scans=scans, rate=430, read_counter=True):
         for v in d.burst_sync(channels=chans, gains=gains,
                 num_scans=scans, rate=2048):
-                print v[0]
+                print v
                 # pass 
         print 4*scans/(time.time()-a)
 
