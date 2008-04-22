@@ -28,6 +28,10 @@ class LabjackU12(object):
 
     @classmethod
     def find_all(cls):
+        """
+        find all connected Labjack U12 devices on all busses
+        and yields a LabjackU12 object for each
+        """
         for bus in usb.busses():
             for dev in bus.devices:
                 if (dev.idVendor, dev.idProduct) == (
@@ -35,6 +39,9 @@ class LabjackU12(object):
                     yield cls(dev)
     
     def __init__(self, usbdev):
+        """
+        initialize a LabjackU12 device from usb device descriptor usbdev
+        """
         self.dev = usbdev
         self.open()
         self.init_read()
@@ -61,6 +68,9 @@ class LabjackU12(object):
         assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
 
     def init_read(self):
+        """
+        perform the initial dummy read necessary
+        """
         assert self.write((0,)*8) == 8
         try:
             return self.read(8)
@@ -307,6 +317,7 @@ class LabjackU12(object):
         build an analog input command
         sample channels (0-7 for single-ended and 8-11 for differential)
         with gains (may only be uneq 1 for differential channels)
+        channels and gains are four-tuples of (possibly identical) integers
         if set_io also set the io lines to state_io before sampling
         use the led (flashes in some way) if led
         for burst and stream, do the scans at rate
