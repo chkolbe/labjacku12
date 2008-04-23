@@ -19,7 +19,7 @@ setup(
         url = "http://www.phys.ethz.ch/~robertjo/labjacku12",
         packages = find_packages(),
         # test_suite = "tests", #.labjacku12_tests.LabjackU12Tests",
-        scripts = ['scripts/*.py'],
+        scripts = ['scripts/u12_scope.py'],
         include_package_data = True,
         zip_safe = True,
         )

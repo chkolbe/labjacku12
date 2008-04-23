@@ -1,7 +1,7 @@
 import unittest
 import time
 import numpy
-from labjack_u12 import LabjackU12
+from labjack.labjack_u12 import LabjackU12
 
 class LabjackU12Tests(unittest.TestCase):
     def setUp(self):
