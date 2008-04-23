@@ -223,21 +223,21 @@ class LabjackU12(object):
 
     def output(self, conf_d=None, conf_io=None,
             state_d=None, state_io=None,
-            set_d_io=False, 
             ao0=0., ao1=0., set_ao=False,
-            reset_c=False):
+            reset_counter=False):
         """
         Configure outputs:
             conf_d and conf_io: bitfields of high: output and low: input
-        Set outputs if set_d_io:
+        Set outputs if either state_d or state_io are uneq None:
             state_d and state_io: bitfields out output state
         Set analog outputs if set_ao:
             voltages ao0 and ao1
-        Reset the counter if reset_c
+        Reset the counter if reset_counter
         Returns: 
             state_d state_io (bitfield of input states)
             counter value
         """ 
+        set_d_io = False
         if conf_d is not None:
             assert 0 <= conf_d <= 0xffff
             self.conf_d = conf_d
@@ -247,9 +247,11 @@ class LabjackU12(object):
         if state_d is not None:
             assert 0 <= state_d <= 0xffff
             self.state_d = state_d
+            set_d_io = True
         if state_io is not None:
             assert 0 <= state_io <= 0xf
             self.state_io = state_io
+            set_d_io = True
         if set_ao:
             assert 0 <= ao0 <= 5
             assert 0 <= ao1 <= 5
@@ -261,12 +263,12 @@ class LabjackU12(object):
             [((self.conf_io^0xf) << 4) | self.state_io, 0,
                 self.ao0 >> 2, self.ao1 >> 2]
         if set_ao:
-            w[5] = ((set_d_io << 4) | (reset_c << 5) | 
+            w[5] = ((set_d_io << 4) | (reset_counter << 5) | 
                     ((self.ao0 & 0x3) << 2) | ((self.ao1 & 0x3) << 0))
         else:
+            assert not reset_counter
             w[5] = 0x57
             w[6] = (set_d_io << 0)
-
         r = self.writeread(w, tmo=20)
         
         assert not r[0] & (1 << 7)
@@ -479,10 +481,10 @@ class LabjackU12(object):
 
     def pulse(self, t1, t2, lines, num_pulses, clear_first=False):
         """
-        generate num_pulses with t1 high and t2 low times on io lines
+        generate num_pulses with t1 high and t2 low times on d lines
         lines, optionally clearing them first
         """
-        assert 0x0 <= lines <= 0xf
+        assert 0x00 <= lines <= 0xff
         assert 1 <= num_pulses < 0xa000
         y1, y2 = t1*self.clock-100, t2*self.clock-100
         assert 126 <= y1 <= 5*255+121*255*255
@@ -490,52 +492,16 @@ class LabjackU12(object):
         c1, c2 = max(1,int(y1/121/256)), max(1,int(y2/121/256))
         b1 = max(1,int(round((y1 - 5*c1)/(121*c1))))
         b2 = max(1,int(round((y2 - 5*c2)/(121*c2))))
+        assert 1 <= b1 <= 256
+        assert 1 <= c1 <= 256
+        assert 1 <= b2 <= 256
+        assert 1 <= c2 <= 256
         t1 = (100+5*c1+121*b1*c1)/self.clock
         t2 = (100+5*c2+121*b2*c2)/self.clock
         w = (b1, c1, b2, c2, lines, 0x64, (clear_first << 7) | 
                 (num_pulses >> 8), (num_pulses & 0xff))
-        r = self.writeread(w, 20) #int(20+1e3*(t1+t2)*num_pulses))
+        r = self.writeread(w, int(20+1e3*(t1+t2)*num_pulses))
         errmask = r[4]
         return errmask, t1, t2
 
-def main():
-    #import numpy as np
-    for d in LabjackU12.find_all():
-        # print d
-        # print d.reset()
-        # print [d.read_mem(i) for i in range(0, 8188, 4)]
-        print d.serial()
-        print d.local_id()
-        print d.calibration()
-        print d.firmware_version()
 
-        #print d.watchdog(ignore=False, timeout=30,
-        #    do_reset=True, active=False)
-        #time.sleep(29)
-
-        d.output(ao0=.6234, ao1=.6234, set_ao=True)
-        chans, gains, scans = (8,8,8,8), (1,5,10,20), 1024
-        a = time.time()
-        #for v in d.stream_sync(channels=chans, gains=gains, 
-        #        num_scans=scans, rate=430, read_counter=True):
-        for v in d.burst_sync(channels=chans, gains=gains,
-                num_scans=scans, rate=2048):
-                print v
-                # pass 
-        print 4*scans/(time.time()-a)
-
-        #print d.input(channels=(0,1,2,3), gains=(1,1,1,1)) # 16ms
-        #print d.input(channels=(8,9,10,11), gains=(10,10,10,10)) # 16ms
-
-        #print d.count(reset=True), d.count(reset=False)
-        for v in range(0, 6, 1):
-            d.output(ao0=v, ao1=v, set_ao=True)
-            print v, d.input(channels=(8,8,9,9), gains=(1,4,1,4))[0]
-
-        #print d.pulse(t1=.1231, t2=.0002063, lines=0xf,
-        #        num_pulses=100)
-
-        del d
-
-if __name__ == "__main__":
-    main()
