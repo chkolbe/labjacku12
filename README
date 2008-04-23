@@ -5,7 +5,7 @@ Python Labjack U12 driver
 Requirements:
   
   * libusb
-  * python-usb
+  * python-usb (aka pyusb; >= 0.4.1 earlier versions work but have bugs)
 
 Setup:
   
@@ -15,6 +15,6 @@ Setup:
 
 Usage:
   
-  * see examples at the bottom of labjack_u12.py
+  * see examples in test/labjack_u12_tests.py
   * for u12_scope.py you will need a full enthought chaco installation
 

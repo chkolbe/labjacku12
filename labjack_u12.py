@@ -463,7 +463,7 @@ class LabjackU12(object):
         time.sleep(num_scans/float(rate)-.02)
         for i in range(int(math.ceil(num_scans/16.))):
             for v in self.bulk_read(channels, gains,
-                    tmo=20+(i==0)*trigger_timeout*1000):
+                    tmo=40+(i==0)*trigger_timeout*1000):
                 yield v
         self.bulk_stop()
 
