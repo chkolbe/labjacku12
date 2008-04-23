@@ -104,6 +104,9 @@ class LabjackU12Tests(unittest.TestCase):
                 "scan took too long (%g Hz)" % scans_sec)
 
     def test_stream(self):
+        """
+        requires ai4 to be connected with cal and ai5 with gnd
+        """
         chans, gains, scans = (10,10,10,10), (1,2,4,5), 1024
         a = time.time()
         for v in self.l.stream_sync(channels=chans, gains=gains, 
