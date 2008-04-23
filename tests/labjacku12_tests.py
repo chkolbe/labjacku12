@@ -71,7 +71,7 @@ class LabjackU12Tests(unittest.TestCase):
         requires ai6 to be connected with 5v and ai7 with gnd
         """
         for g in self.l.gains:
-            for s,c,e in [(5, 11, .1), (2.5, 10, .05)]:
+            for s,c,e in [(5, 11, .1), (2.5, 10, .03)]:
                 v = self.l.input(channels=(c,c,c,c), gains=(g,g,g,g))
                 r = v[0]
                 if s*g > 20:
@@ -130,10 +130,11 @@ class LabjackU12Tests(unittest.TestCase):
         """
         self.l.output(conf_d=0x01, state_d=0x0)
         self.l.count(reset=True)
-        errmask, t1, t2 = self.l.pulse(t1=.001231, t2=.002063,
+        t10, t20 = 0.001231, 0.002063
+        errmask, t1, t2 = self.l.pulse(t1=t10, t2=t20,
                 lines=0x01, num_pulses=100)
-        assert abs(t1 - .001231) < .001231/10
-        assert abs(t2 - .002063) < .002063/10
+        assert abs(t1-t10)/t10 < .1
+        assert abs(t2-t20)/t20 < .1
         c, t = self.l.count()
         assert c == 100, "counted %g pulses" % c
 
