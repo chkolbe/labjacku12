@@ -9,9 +9,14 @@ Requirements:
 
 Setup:
   
-  * copy doc/85-usbdev.rules to /etc/udev/rules.d/ and add yourself to
-    the plugdev group (adduser yourself plugdev) to be able to access
-    the usb devfs device as a regular user
+  * copy the folling two lines to /etc/udev/rules.d/doc/85-usbdev.rules 
+    and add yourself to the plugdev group (adduser yourself plugdev) to 
+    be able to access the usb devfs device as a regular user:
+
+----------
+# Labjack U12
+ATTRS{idProduct}=="0001", ATTRS{idVendor}=="0cd5", GROUP="plugdev", MODE="0660"
+----------
 
 Usage:
   
