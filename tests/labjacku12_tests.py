@@ -100,7 +100,7 @@ class LabjackU12Tests(unittest.TestCase):
                 self.failUnless(abs(r-2.5) < .1,
                    "%s should be cal, 2.5v" % v[0])
         scans_sec = 4*scans/(time.time()-a)
-        self.failUnless(scans_sec > 3000,
+        self.failUnless(scans_sec > 2000,
                 "scan took too long (%g Hz)" % scans_sec)
 
     def test_stream(self):
