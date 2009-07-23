@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #
 # Labjack U12 driver
-# (c) 2008 Robert Jordens <jordens@phys.ethz.ch> 
+# Copyright 2008 Robert Jordens, Thomas Uehlinger
 # 
 # This driver is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
