@@ -38,6 +38,11 @@ class LabjackU12(object):
                         cls.id_vendor, cls.id_product):
                     yield cls(dev)
     
+    
+    @classmethod
+    def first(cls):
+        return cls.find_all().next()
+        
     def __init__(self, usbdev):
         """
         initialize a LabjackU12 device from usb device descriptor usbdev
@@ -51,21 +56,25 @@ class LabjackU12(object):
     def open(self):
         self.handle = self.dev.open()
         # self.handle.reset()
-        conf = self.dev.configurations[self.id_configuration]
-        self.interface = conf.interfaces[self.id_interface][0]
-        try:
-            self.handle.detachKernelDriver(self.interface)
-        except usb.USBError:
-            # already detached
-            pass
-        self.handle.setConfiguration(conf)
-        self.handle.claimInterface(self.interface)
+        
+        self.interface = \
+            self.dev.configurations[self.id_configuration
+                    ].interfaces[self.id_interface][0]
         self.ep_in = self.interface.endpoints[0]
         self.ep_out = self.interface.endpoints[1]
         assert self.ep_in.address == 0x81
         assert self.ep_out.address == 0x02
         assert self.ep_in.type == usb.ENDPOINT_TYPE_INTERRUPT
         assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
+     
+        try:
+            self.handle.detachKernelDriver(self.id_configuration)
+        except usb.USBError:
+            pass
+        
+        self.handle.setConfiguration(1)
+        self.handle.claimInterface(self.interface)
+        
 
     def init_read(self):
         """
@@ -77,10 +86,6 @@ class LabjackU12(object):
         except usb.USBError:
             time.sleep(0.02)
             pass
-    
-    def __del__(self):
-        if hasattr(self, "handle"):
-            self.close()
 
     def close(self):
         self.handle.releaseInterface()
@@ -131,32 +136,6 @@ class LabjackU12(object):
         assert r[0] == 81
         assert w[6:] == r[6:]
 
-    def serial(self):
-        """
-        reads and returns the serial number of the labjack device
-        """
-        r = self.read_mem(0)
-        return sum(ri << 8*i for i, ri in enumerate(r[::-1]))
-
-    def calibration(self):
-        """
-        reads and returns the calibration array:
-        eight bytes for the channel offset corrections
-        eight bytes for the channel gain corrections
-        four bytes used in differential mode
-        """
-        a = [self.read_mem(0x100+(0x010*j)) for j in range(8)]
-        b = [self.read_mem(0x180+(0x010*j)) for j in range(4)]
-        return [i[1] for i in a] + [i[3] for i in a] + [i[1] for i in b]
-
-    def local_id(self):
-        """
-        reads and returns the local id that can be assigned
-        to distinguish different labjack boards connected to the same
-        bus and possibly enumerated in different sequences
-        """
-        return self.read_mem(8)[3]
-
     def reset(self):
         """
         causes the device to reset itself ending in re-enumeration
@@ -180,23 +159,33 @@ class LabjackU12(object):
         """
         return self.watchdog(timeout=None)
 
-    # general properties
+    def serial(self):
+        """
+        Return the unique serial number of the Labjack device.
+        """
+        r = self.read_mem(0)
+        return sum(ri << 8*i for i, ri in enumerate(r[::-1]))
+
+    def local_id(self):
+        """
+        reads and returns the local id that can be assigned
+        to distinguish different labjack boards connected to the same
+        bus and possibly enumerated in different sequences
+        """
+        return self.read_mem(8)[3]
+
+    def calibration(self):
+        """
+        reads and returns the calibration array:
+        eight bytes for the channel offset corrections
+        eight bytes for the channel gain corrections
+        four bytes used in differential mode
+        """
+        a = [self.read_mem(0x100+(0x010*j)) for j in range(8)]
+        b = [self.read_mem(0x180+(0x010*j)) for j in range(4)]
+        return [i[1] for i in a] + [i[3] for i in a] + [i[1] for i in b]
 
     clock = 6e6
-
-    # State management
-
-    # digital lines on the SubD25
-    conf_d = 0x0000
-    state_d = 0x0000
-
-    # the four main terminal digital ones
-    conf_io = 0x0
-    state_io = 0x0
-
-    # analog outputs
-    ao0 = 0
-    ao1 = 0
 
     def watchdog(self, timeout=None, d0=None, d1=None, d8=None,
             do_reset=False):
@@ -221,67 +210,13 @@ class LabjackU12(object):
         # returns firmware version
         return r[0]+r[1]/100.
 
-    def output(self, conf_d=None, conf_io=None,
-            state_d=None, state_io=None,
-            ao0=0., ao1=0., set_ao=False,
-            reset_counter=False):
-        """
-        Configure outputs:
-            conf_d and conf_io: bitfields of high: output and low: input
-        Set outputs if either state_d or state_io are uneq None:
-            state_d and state_io: bitfields out output state
-        Set analog outputs if set_ao:
-            voltages ao0 and ao1
-        Reset the counter if reset_counter
-        Returns: 
-            state_d state_io (bitfield of input states)
-            counter value
-        """ 
-        set_d_io = False
-        if conf_d is not None:
-            assert 0 <= conf_d <= 0xffff
-            self.conf_d = conf_d
-        if conf_io is not None:
-            assert 0 <= conf_io <= 0xf
-            self.conf_io = conf_io
-        if state_d is not None:
-            assert 0 <= state_d <= 0xffff
-            self.state_d = state_d
-            set_d_io = True
-        if state_io is not None:
-            assert 0 <= state_io <= 0xf
-            self.state_io = state_io
-            set_d_io = True
-        if set_ao:
-            assert 0 <= ao0 <= 5
-            assert 0 <= ao1 <= 5
-            self.ao0 = int(round(ao0/5.*1023))
-            self.ao1 = int(round(ao1/5.*1023))
-
-        w = list(divmod(self.conf_d^0xffff, 0x100)) + \
-            list(divmod(self.state_d, 0x100)) + \
-            [((self.conf_io^0xf) << 4) | self.state_io, 0,
-                self.ao0 >> 2, self.ao1 >> 2]
-        if set_ao:
-            w[5] = ((set_d_io << 4) | (reset_counter << 5) | 
-                    ((self.ao0 & 0x3) << 2) | ((self.ao1 & 0x3) << 0))
-        else:
-            assert not reset_counter
-            w[5] = 0x57
-            w[6] = (set_d_io << 0)
-        r = self.writeread(w, tmo=20)
-        
-        assert not r[0] & (1 << 7)
-        state_d = (r[1] << 8) + r[2]
-        state_io = r[3] >> 4
-        count = sum((v << i*8) for i,v in enumerate(r[:3:-1]))
-        return state_d, state_io, count
 
     gains = [1, 2, 4, 5, 8, 10, 16, 20]
 
     def mux_cmd(self, ch, g):
-        assert (ch >= 8) | (g == 1)
+        g = int(round(g))
         assert g in self.gains
+        assert (ch >= 8) | (g == 1)
         return (self.gains.index(g) << 4) | (ch^0x8)
 
     def apply_calibration(self, ch, g, v):
@@ -301,17 +236,20 @@ class LabjackU12(object):
             if ccdiff >= 2:
                 v -= (v-0x800)/256.
             elif ccdiff <= -2:
-			    v += (v-0x800)/256.
+                v += (v-0x800)/256.
         return max(min(v, 0x1000-1), 0)
-
-    def bits_to_volts(self, ch, g, b):
+    
+    def ao_volts_to_bits(self, v):
+        return int(round(v/5.*1023))
+    
+    def ai_bits_to_volts(self, ch, g, b):
         if ch < 8:
             return b*20./0x1000 - 10.
         else:
             return (b*40./0x1000 - 20.) / g
 
     def build_ai_command(self, cmd, channels, gains,
-            state_io=0x0, set_io=False, led=True,
+            state_io=0x0, set_io=False, led=False,
             rate=1200, feature_reports=True, read_counter=False,
             num_scans=1024,
             trigger=0, trigger_state=False):
@@ -329,7 +267,8 @@ class LabjackU12(object):
         do num_scans (rounded to a power of two) in burst mode
         trigger on io0 (1) or io1 (2) reaching trigger_state if trigger uneq 0
         """
-        assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
+        #assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
+        assert len(channels) == 4
         assert len(channels) == len(gains)
         if set_io:
             assert 0 <= state_io <= 0xf
@@ -375,17 +314,102 @@ class LabjackU12(object):
                 ((r[2] & 0x0f) << 8) + r[4],
                 ((r[5] & 0xf0) << 4) + r[6],
                 ((r[5] & 0x0f) << 8) + r[7])
-        volts = [self.bits_to_volts(c, g, self.apply_calibration(c, g, v))
+        volts = [self.ai_bits_to_volts(c, g, self.apply_calibration(c, g, v))
                 for c, g, v in zip(channels, gains, bits)]
         count = sum(v<<i*8 for i,v in enumerate(r[:3:-1]))
         return (volts, state_io, count, overvoltage, ofchecksum, 
                 iterations, backlog)
 
-    def input(self, channels, gains, **kwargs):
+    # State management
+
+    # digital lines on the SubD25
+    conf_d = 0x0000
+    state_d = 0x0000
+
+    # the four main terminal digital ones
+    conf_io = 0x0
+    state_io = 0x0
+
+    # analog outputs
+    ao0 = 0.
+    ao1 = 0.
+
+    def output(self, conf_d=None, conf_io=None,
+            state_d=None, state_io=None,
+            ao0=None, ao1=None,
+            reset_counter=False):
         """
-        sample channels at gains
-        (see build_ai_command for parameters and build_ai_response for
-        return values)
+        Configure outputs:
+        conf_d: I/O configuration bitmask of D0..D15 (0=input, 1=output)
+        conf_io: I/O configuration bitmask of IO0..IO3 (0=input, 1=output)
+        state_d: output bitmask of D0..D15
+        state_io: output bitmask of IO0..IO3
+        ao0..ao1: analoge output voltage in the range 0..+5 V
+        set_ao: whether to set the analog output voltages
+        set_doutput: whether to set the D0..D15 and IO0..IO3 state and output values
+        reset_c: whether to reset the counter after reading it
+        Returns: 
+            state_d state_io (bitfield of input states)
+            counter value
+        """ 
+        set_d_io = state_d is not None or state_io is not None
+        if conf_d is not None:
+            assert 0 <= conf_d <= 0xffff
+            self.conf_d = conf_d
+        if conf_io is not None:
+            assert 0 <= conf_io <= 0xf
+            self.conf_io = conf_io
+        if state_d is not None:
+            assert 0 <= state_d <= 0xffff
+            self.state_d = state_d
+        if state_io is not None:
+            assert 0 <= state_io <= 0xf
+            self.state_io = state_io       
+        if ao0 is not None:
+            assert 0 <= ao0 <= 5
+            self.ao0 = self.ao_volts_to_bits(ao0)
+        if ao1 is not None:
+            assert 0 <= ao1 <= 5
+            self.ao1 = self.ao_volts_to_bits(ao1)
+
+        w = list(divmod(self.conf_d^0xffff, 0x100)) + \
+            list(divmod(self.state_d, 0x100)) + \
+            [((self.conf_io^0xf) << 4) | self.state_io, 0,
+                self.ao0 >> 2, self.ao1 >> 2]
+        if set_ao:
+            w[5] = ((set_d_io << 4) | (reset_counter << 5) | 
+                    ((self.ao0 & 0x3) << 2) | ((self.ao1 & 0x3) << 0))
+        else:
+            assert not reset_counter
+            w[5] = 0x57
+            w[6] = (set_d_io << 0)
+        r = self.writeread(w, tmo=20)
+        
+        assert not r[0] & (1 << 7)
+        state_d = (r[1] << 8) + r[2]
+        state_io = r[3] >> 4
+        count = sum((v << i*8) for i,v in enumerate(r[:3:-1]))
+        return state_d, state_io, count
+
+    def input(self, channels, gains = (1,1,1,1), **kwargs):
+        """
+        channels: a tuple of 4 channel numers in the range (0..7 for single ended channels or 8..11 for differential) to read
+        gains: A tuple of 4 gains (one of [1: +-20 V, 2: +-10 V, 4: +-5 V, 5: +-4 V, 8: +-2.5V, 10: +-2 V, 16: +-1.25 V, 20: +-1 V]). 
+            Only applicable for differential channels. In a single ended measurement the range is always -10..+10 V.
+        keyword arguments::
+        state_io=0x0: 
+        set_io=False:
+        led=False:
+        rate=1200:
+        feature_reports=True:
+        read_counter=False:
+        num_scans=1024:
+        trigger=0:
+        trigger_state=False:
+        trigger_on=True:
+        
+        Returns (volts, state_io, count, overvoltage, ofchecksum, 
+                iterations, backlog).
         """
         challenge = random.randint(0,0xff)
         w = self.build_ai_command(cmd=4, channels=channels, gains=gains,
@@ -395,6 +419,10 @@ class LabjackU12(object):
         assert r[1] == challenge
         return self.parse_ai_response(r, channels, gains)
 
+    def input_single(self, channel, gain=1):
+        r = self.input((channel,)*4, (gain,)*4)
+        return r[0].sum()/4.
+         
     def stream(self, **kwargs):
         """
         start a streaming sampling
@@ -469,8 +497,9 @@ class LabjackU12(object):
 
     def count(self, reset=False, strobe=False):
         """
-        read and return counter optionally resetting it and strobing the
-        stb line
+        Read the counter.
+        reset: whether to reset the counter to zero after reading it
+        strobe: whether to activate the strobe (STB) output
         """
         w = ((reset & 1) | (strobe & 2), 0, 0, 0, 0, 82, 0, 0)
         a = time.time()
@@ -481,8 +510,12 @@ class LabjackU12(object):
 
     def pulse(self, t1, t2, lines, num_pulses, clear_first=False):
         """
-        generate num_pulses with t1 high and t2 low times on d lines
-        lines, optionally clearing them first
+        Output num_pulses pulse with off-time t1 and on-time t2 on the digital lines D0..D7.
+        t1: off-time
+        t2: on-time
+        lines: bitmask defining on which of D0..D7 the pulses should be output
+        num_pulses: number of pulses to output
+        clear_first: whether to clear the digital lines first
         """
         assert 0x00 <= lines <= 0xff
         assert 1 <= num_pulses < 0xa000
@@ -503,5 +536,4 @@ class LabjackU12(object):
         r = self.writeread(w, int(20+1e3*(t1+t2)*num_pulses))
         errmask = r[4]
         return errmask, t1, t2
-
 
