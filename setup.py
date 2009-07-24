@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
         name = "labjacku12",
-        version = "0.3",
+        version = "0.4",
         author = "Robert Jordens",
         author_email = "jordens@phys.ethz.ch",
         description = "LabJack U12 driver",
