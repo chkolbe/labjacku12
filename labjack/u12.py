@@ -1,7 +1,8 @@
 #!/usr/bin/python
+# -*- coding: utf8 -*-
 #
 # Labjack U12 driver
-# Copyright 2008 Robert Jordens, Thomas Uehlinger
+# Copyright 2008, 2009 Robert Jordens, Thomas Uehlinger
 # 
 # This driver is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -38,7 +39,6 @@ class LabjackU12(object):
                         cls.id_vendor, cls.id_product):
                     yield cls(dev)
     
-    
     @classmethod
     def first(cls):
         return cls.find_all().next()
@@ -54,42 +54,36 @@ class LabjackU12(object):
         self.caldata = self.calibration()
 
     def open(self):
+        conf = self.dev.configurations[self.id_configuration]
+        intf = conf.interfaces[self.id_interface][0]
         self.handle = self.dev.open()
-        # self.handle.reset()
-        
-        self.interface = \
-            self.dev.configurations[self.id_configuration
-                    ].interfaces[self.id_interface][0]
-        self.ep_in = self.interface.endpoints[0]
-        self.ep_out = self.interface.endpoints[1]
+        try:
+            self.handle.detachKernelDriver(intf)
+        except usb.USBError, e:
+            pass
+        self.handle.setConfiguration(conf)
+        self.handle.claimInterface(intf)
+        self.ep_in = intf.endpoints[0]
+        self.ep_out = intf.endpoints[1]
         assert self.ep_in.address == 0x81
         assert self.ep_out.address == 0x02
         assert self.ep_in.type == usb.ENDPOINT_TYPE_INTERRUPT
         assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
-     
-        try:
-            self.handle.detachKernelDriver(self.id_configuration)
-        except usb.USBError:
-            pass
         
-        self.handle.setConfiguration(1)
-        self.handle.claimInterface(self.interface)
-        
-
     def init_read(self):
         """
         perform the initial dummy read necessary
         """
         assert self.write((0,)*8) == 8
         try:
-            return self.read(8)
+            return self.read(8, tmo=20)
         except usb.USBError:
-            time.sleep(0.02)
             pass
 
     def close(self):
-        self.handle.releaseInterface()
-        del self.handle
+        if hasattr(self, "handle"):
+            self.handle.releaseInterface()
+            del self.handle
 
     def feature_read(self, tmo=5000):
         return self.handle.controlMsg(
@@ -157,7 +151,7 @@ class LabjackU12(object):
         reads and returns the firmware version in floating point 
         e.g. 1.10
         """
-        return self.watchdog(timeout=None)
+        return self.watchdog(get_fw=True)
 
     def serial(self):
         """
@@ -188,7 +182,7 @@ class LabjackU12(object):
     clock = 6e6
 
     def watchdog(self, timeout=None, d0=None, d1=None, d8=None,
-            do_reset=False):
+            do_reset=False, get_fw=False):
         """
         controls the watchdog function
         if timeout is None: only returns the firmware version
@@ -199,7 +193,7 @@ class LabjackU12(object):
         deactivation of the watchdog!
         """
         ncyc = max(1, int(round((timeout or 0)*self.clock/(1<<16))))
-        w = ((timeout is None)<<0, 0, 0, 0,
+        w = (bool(get_fw), 0, 0, 0,
                 ((d0 is not None)<<7) | (bool(d0)<<6) |
                 ((d1 is not None)<<5) | (bool(d1)<<4) |
                 ((d8 is not None)<<3) | (bool(d8)<<2) |
@@ -207,9 +201,9 @@ class LabjackU12(object):
                         divmod(ncyc, 0x100)
         r = self.writeread(w)
         assert r[2:] == w[2:]
-        # returns firmware version
-        return r[0]+r[1]/100.
-
+        if get_fw:
+            # returns firmware version
+            return r[0]+r[1]/100.
 
     gains = [1, 2, 4, 5, 8, 10, 16, 20]
 
@@ -220,16 +214,15 @@ class LabjackU12(object):
         return (self.gains.index(g) << 4) | (ch^0x8)
 
     def apply_calibration(self, ch, g, v):
-        if ch < 8:
-            ch &= 0x7
+        if not ch & 0x8:
             off = self.caldata[ch]
             v -= off
-            gaincal = self.caldata[ch + 8]
+            gaincal = self.caldata[ch+8]
             v += (v-0x800)/512. * (off-gaincal)
         else:
             ch &= 0x3
             czse = self.caldata[2*ch] - self.caldata[2*ch+1]
-            off = g*czse/2. + self.caldata[ch+16] - czse/2.
+            off = (g-1)*czse/2. + self.caldata[ch+16]
             v -= off
             ccdiff = (self.caldata[2*ch+8]-self.caldata[2*ch]) - \
                     (self.caldata[2*ch+9]-self.caldata[2*ch+1])
@@ -240,16 +233,16 @@ class LabjackU12(object):
         return max(min(v, 0x1000-1), 0)
     
     def ao_volts_to_bits(self, v):
-        return int(round(v/5.*1023))
+        return int(round(v*1023/5.))
     
     def ai_bits_to_volts(self, ch, g, b):
-        if ch < 8:
+        if not ch & 0x8:
             return b*20./0x1000 - 10.
         else:
             return (b*40./0x1000 - 20.) / g
 
     def build_ai_command(self, cmd, channels, gains,
-            state_io=0x0, set_io=False, led=False,
+            state_io=None, led=True,
             rate=1200, feature_reports=True, read_counter=False,
             num_scans=1024,
             trigger=0, trigger_state=False):
@@ -258,19 +251,20 @@ class LabjackU12(object):
         sample channels (0-7 for single-ended and 8-11 for differential)
         with gains (may only be uneq 1 for differential channels)
         channels and gains are four-tuples of (possibly identical) integers
-        if set_io also set the io lines to state_io before sampling
+        set the io lines to state_io before sampling
         use the led (flashes in some way) if led
         for burst and stream, do the scans at rate
         use feature_reports for burst and stream
         alternatively do not sample the analog inputs but sample the
-        counter (read_counter) in stream mode
-        do num_scans (rounded to a power of two) in burst mode
-        trigger on io0 (1) or io1 (2) reaching trigger_state if trigger uneq 0
+            counter (read_counter) in stream mode
+        do num_scans (rounded up to a power of two) in burst mode
+        trigger on io0 (trigger=1) or io1 (trigger=2) 
+            reaching trigger_state
         """
         #assert len(channels) in (1,2,4) # TODO: 1,2 not implemented
         assert len(channels) == 4
         assert len(channels) == len(gains)
-        if set_io:
+        if state_io is not None:
             assert 0 <= state_io <= 0xf
             self.state_io = state_io
         sample_int = int(round(self.clock/rate/4.))
@@ -279,7 +273,7 @@ class LabjackU12(object):
         assert 733 <= sample_int <= 0xffff
         challenge = random.randint(0,0xff)
         w = [self.mux_cmd(ch, g) for ch, g in zip(channels, gains)] + \
-            [(led << 0) | (set_io << 1),
+            [(led << 0) | ((state_io is not None) << 1),
                  (1<<7) | (self.state_io << 0) | (cmd << 4)] + \
             list(divmod(sample_int, 1<<8))
         if cmd == 1: # stream
@@ -291,7 +285,7 @@ class LabjackU12(object):
             w[4] |= ((int(10-math.ceil(math.log(num_scans, 2))) << 5) | 
                         (trigger_state << 2) | ((trigger & 0x3) << 3))
             w[6] |= (feature_reports << 7) | (bool(trigger) << 6)
-        elif cmd == 4:
+        elif cmd == 4: # single
             assert not read_counter
             assert not trigger
         return w
@@ -306,7 +300,8 @@ class LabjackU12(object):
         number and backlog value
         """
         assert r[0] & (1 << 7)
-        ofchecksum, overvoltage = bool(r[0] & (1<<5)), bool(r[0] & (1<<4))
+        ofchecksum = bool(r[0] & (1<<5))
+        overvoltage = bool(r[0] & (1<<4))
         state_io = r[0] & 0xf
         iterations = r[1] >> 5
         backlog = r[1] & 0x1f
@@ -314,8 +309,9 @@ class LabjackU12(object):
                 ((r[2] & 0x0f) << 8) + r[4],
                 ((r[5] & 0xf0) << 4) + r[6],
                 ((r[5] & 0x0f) << 8) + r[7])
-        volts = [self.ai_bits_to_volts(c, g, self.apply_calibration(c, g, v))
-                for c, g, v in zip(channels, gains, bits)]
+        volts = [self.ai_bits_to_volts(c, g,
+                    self.apply_calibration(c, g, v))
+                        for c, g, v in zip(channels, gains, bits)]
         count = sum(v<<i*8 for i,v in enumerate(r[:3:-1]))
         return (volts, state_io, count, overvoltage, ofchecksum, 
                 iterations, backlog)
@@ -345,14 +341,14 @@ class LabjackU12(object):
         state_d: output bitmask of D0..D15
         state_io: output bitmask of IO0..IO3
         ao0..ao1: analoge output voltage in the range 0..+5 V
-        set_ao: whether to set the analog output voltages
-        set_doutput: whether to set the D0..D15 and IO0..IO3 state and output values
         reset_c: whether to reset the counter after reading it
         Returns: 
             state_d state_io (bitfield of input states)
             counter value
         """ 
         set_d_io = state_d is not None or state_io is not None
+        set_ao = ao0 is not None or ao1 is not None
+
         if conf_d is not None:
             assert 0 <= conf_d <= 0xffff
             self.conf_d = conf_d
@@ -367,20 +363,22 @@ class LabjackU12(object):
             self.state_io = state_io       
         if ao0 is not None:
             assert 0 <= ao0 <= 5
-            self.ao0 = self.ao_volts_to_bits(ao0)
+            self.ao0 = ao0
         if ao1 is not None:
             assert 0 <= ao1 <= 5
-            self.ao1 = self.ao_volts_to_bits(ao1)
+            self.ao1 = ao1
+
+        ao0 = self.ao_volts_to_bits(self.ao0)
+        ao1 = self.ao_volts_to_bits(self.ao1)
 
         w = list(divmod(self.conf_d^0xffff, 0x100)) + \
             list(divmod(self.state_d, 0x100)) + \
             [((self.conf_io^0xf) << 4) | self.state_io, 0,
-                self.ao0 >> 2, self.ao1 >> 2]
-        if set_ao:
+                ao0 >> 2, ao1 >> 2]
+        if set_ao or reset_counter:
             w[5] = ((set_d_io << 4) | (reset_counter << 5) | 
-                    ((self.ao0 & 0x3) << 2) | ((self.ao1 & 0x3) << 0))
+                    ((ao0 & 0x3) << 2) | ((ao1 & 0x3) << 0))
         else:
-            assert not reset_counter
             w[5] = 0x57
             w[6] = (set_d_io << 0)
         r = self.writeread(w, tmo=20)
@@ -393,20 +391,13 @@ class LabjackU12(object):
 
     def input(self, channels, gains = (1,1,1,1), **kwargs):
         """
-        channels: a tuple of 4 channel numers in the range (0..7 for single ended channels or 8..11 for differential) to read
-        gains: A tuple of 4 gains (one of [1: +-20 V, 2: +-10 V, 4: +-5 V, 5: +-4 V, 8: +-2.5V, 10: +-2 V, 16: +-1.25 V, 20: +-1 V]). 
-            Only applicable for differential channels. In a single ended measurement the range is always -10..+10 V.
-        keyword arguments::
-        state_io=0x0: 
-        set_io=False:
-        led=False:
-        rate=1200:
-        feature_reports=True:
-        read_counter=False:
-        num_scans=1024:
-        trigger=0:
-        trigger_state=False:
-        trigger_on=True:
+        channels: a tuple of 4 channel numers in the range (0..7 
+            for single ended channels or 8..11 for differential) to read
+        gains: A tuple of 4 gains (one of [1: +-20 V, 2: +-10 V, 4: +-5 V,
+            5: +-4 V, 8: +-2.5V, 10: +-2 V, 16: +-1.25 V, 20: +-1 V]). 
+            Only applicable for differential channels. In a single ended
+            measurement the range is always -10..+10 V.
+        keyword arguments: see build_ai_command()
         
         Returns (volts, state_io, count, overvoltage, ofchecksum, 
                 iterations, backlog).
@@ -421,7 +412,7 @@ class LabjackU12(object):
 
     def input_single(self, channel, gain=1):
         r = self.input((channel,)*4, (gain,)*4)
-        return r[0].sum()/4.
+        return sum(r[0])/4.
          
     def stream(self, **kwargs):
         """
@@ -445,8 +436,8 @@ class LabjackU12(object):
    
     def bulk_read(self, channels, gains, **kwargs):
         """
-        read 16 scans and yield them as a generator
-        see parse_qi_response for format
+        read 16 scans and yield them
+        see parse_ai_response for format
         """
         resp = self.feature_read(**kwargs)
         while len(resp) >= 8:
@@ -471,7 +462,7 @@ class LabjackU12(object):
                 rate=rate, **kwargs)
         for i in range(int(math.ceil(num_scans/16.))):
             for v in self.bulk_read(channels, gains,
-                    tmo=20+16*1000/rate):
+                    tmo=40+16*1000/rate):
                 yield v
         self.bulk_stop()
 
@@ -510,7 +501,8 @@ class LabjackU12(object):
 
     def pulse(self, t1, t2, lines, num_pulses, clear_first=False):
         """
-        Output num_pulses pulse with off-time t1 and on-time t2 on the digital lines D0..D7.
+        Output num_pulses pulse with off-time t1 and on-time t2 
+            on the digital lines D0..D7.
         t1: off-time
         t2: on-time
         lines: bitmask defining on which of D0..D7 the pulses should be output
