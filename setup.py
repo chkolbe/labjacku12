@@ -6,7 +6,7 @@ setup(
         name = "labjacku12",
         version = "0.4",
         author = "Robert Jordens",
-        author_email = "jordens@phys.ethz.ch",
+        author_email = "robert@joerdens.org",
         description = "LabJack U12 driver",
         license = "BSD",
         #install_requires = [],
