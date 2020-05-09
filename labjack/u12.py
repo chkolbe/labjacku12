@@ -19,7 +19,7 @@
 # the Free Software Foundation, Inc., 51 Franklin Street,
 # Boston, MA 02110-1301, USA.
 
-import usb, time, random, math
+import usb1, time, random, math
 
 class LabjackU12(object):
     id_vendor = 0x0cd5
@@ -33,15 +33,16 @@ class LabjackU12(object):
         find all connected Labjack U12 devices on all busses
         and yields a LabjackU12 object for each
         """
-        for bus in usb.busses():
-            for dev in bus.devices:
-                if (dev.idVendor, dev.idProduct) == (
-                        cls.id_vendor, cls.id_product):
-                    yield cls(dev)
+
+        context = usb1.USBContext()
+
+        for dev in context.getDeviceList():
+            if (dev.getVendorID(), dev.getProductID()) == (cls.id_vendor, cls.id_product):
+                yield cls(dev)
     
     @classmethod
     def first(cls):
-        return cls.find_all().next()
+        return next(cls.find_all())
         
     def __init__(self, usbdev):
         """
@@ -52,23 +53,28 @@ class LabjackU12(object):
         self.init_read()
         assert self.firmware_version() >= 1.10
         self.caldata = self.calibration()
+        self.ao0_offset = 0.
+        self.ao1_offset = 0.
 
     def open(self):
-        conf = self.dev.configurations[self.id_configuration]
-        intf = conf.interfaces[self.id_interface][0]
+        conf = list(self.dev.iterConfigurations())[self.id_configuration]
+        intf = list(conf.iterInterfaces())[self.id_interface]
         self.handle = self.dev.open()
         try:
-            self.handle.detachKernelDriver(intf)
-        except usb.USBError, e:
+            self.handle.detachKernelDriver(self.id_interface)
+        except usb1.USBError as e:
             pass
-        self.handle.setConfiguration(conf)
-        self.handle.claimInterface(intf)
-        self.ep_in = intf.endpoints[0]
-        self.ep_out = intf.endpoints[1]
-        assert self.ep_in.address == 0x81
-        assert self.ep_out.address == 0x02
-        assert self.ep_in.type == usb.ENDPOINT_TYPE_INTERRUPT
-        assert self.ep_out.type == usb.ENDPOINT_TYPE_INTERRUPT
+        self.handle.setConfiguration(self.id_configuration)
+        self.handle.claimInterface(self.id_interface)
+        # EP contained in Settings we assume Setting0
+        setting = list(intf.iterSettings())[0]
+        eps = list(setting.iterEndpoints())
+        self.ep_in = eps[0]
+        self.ep_out = eps[1]
+        assert self.ep_in.getAddress() == 0x81
+        assert self.ep_out.getAddress() == 0x02
+        #assert self.ep_in.type == usb1.ENDPOINT_TYPE_INTERRUPT
+        #assert self.ep_out.type == usb1.ENDPOINT_TYPE_INTERRUPT
         
     def init_read(self):
         """
@@ -77,28 +83,39 @@ class LabjackU12(object):
         assert self.write((0,)*8) == 8
         try:
             return self.read(8, tmo=20)
-        except usb.USBError:
+        except usb1.USBError:
             pass
 
     def close(self):
         if hasattr(self, "handle"):
-            self.handle.releaseInterface()
+            self.handle.releaseInterface(self.id_interface)
             del self.handle
 
     def feature_read(self, tmo=5000):
-        return self.handle.controlMsg(
-            requestType=usb.TYPE_CLASS|usb.RECIP_INTERFACE|usb.ENDPOINT_IN,
-            request=usb.REQ_CLEAR_FEATURE,
-            value=(0x03<<8)+0x00, index=0, buffer=128, 
-            timeout=tmo)
+        # return self.handle.controlMsg(
+        #     requestType=usb.TYPE_CLASS|usb.RECIP_INTERFACE|usb.ENDPOINT_IN,
+        #     request=usb.REQ_CLEAR_FEATURE,
+        #     value=(0x03<<8)+0x00, index=0, buffer=128, 
+        #     timeout=tmo)        
+        return self.handle.controlRead(
+            #request_type
+            usb1.TYPE_CLASS|usb1.RECIPIENT_INTERFACE|usb1.ENDPOINT_IN, 
+            #request
+            usb1.REQUEST_CLEAR_FEATURE, 
+            #value
+            (0x03<<8)+0x00,
+            #index
+            0,
+            #length
+            128)
 
     def write(self, buf, tmo=20):
         return self.handle.interruptWrite(
-                self.ep_out.address, buf, tmo)
+                self.ep_out.getAddress(), buf, tmo)
 
     def read(self, siz, tmo=20):
         return self.handle.interruptRead(
-                self.ep_in.address, siz, tmo)
+                self.ep_in.getAddress(), siz, tmo)
 
     def writeread(self, w, tmo=20, wtmo=20):
         assert len(w) == 8
@@ -176,8 +193,49 @@ class LabjackU12(object):
         four bytes used in differential mode
         """
         a = [self.read_mem(0x100+(0x010*j)) for j in range(8)]
+        print(a)
         b = [self.read_mem(0x180+(0x010*j)) for j in range(4)]
+        print(b)
         return [i[1] for i in a] + [i[3] for i in a] + [i[1] for i in b]
+
+    def calibration_update(self):
+        """
+        a = [(0, 0, 0, 0), (255, 250, 255, 251), (0, 0, 255, 255), (0, 2, 0, 0), (0, 1, 0, 0), (0, 4, 0, 2), (0, 0, 255, 253), (0, 0, 255, 255)]
+        b = [(0, 1, 0, 1), (255, 254, 255, 252), (255, 254, 255, 252), (255, 255, 255, 254)]
+        caldata = [0, 250, 0, 2, 1, 4, 0, 0, 0, 251, 255, 0, 0, 2, 253, 255, 1, 254, 254, 255]
+
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 254, 254, 255]
+        """
+        # Read the Memory Area
+        a = [self.read_mem(0x100+(0x010*j)) for j in range(8)]
+        b = [self.read_mem(0x180+(0x010*j)) for j in range(4)]
+        # Insert the local caldata for channel Offset
+        a[0][1] = self.caldata[0]
+        a[1][1] = self.caldata[1]
+        a[2][1] = self.caldata[2]
+        a[3][1] = self.caldata[3]
+        a[4][1] = self.caldata[4]
+        a[5][1] = self.caldata[5]
+        a[6][1] = self.caldata[6]
+        a[7][1] = self.caldata[7]
+        # Insert the local caldata for channel Gain
+        a[0][3] = self.caldata[8]
+        a[1][3] = self.caldata[9]
+        a[2][3] = self.caldata[10]
+        a[3][3] = self.caldata[11]
+        a[4][3] = self.caldata[12]
+        a[5][3] = self.caldata[13]
+        a[6][3] = self.caldata[14]
+        a[7][3] = self.caldata[15]
+        # Insert the local caldata for channel in Diff mode
+        b[0][1] = self.caldata[16]
+        b[1][1] = self.caldata[17]
+        b[2][1] = self.caldata[18]
+        b[3][1] = self.caldata[19]
+        #write into Device Memory
+        [self.write_mem(0x100+(0x010*j), a[j]) for j in range(8)]
+        [self.write_mem(0x180+(0x010*j), b[j]) for j in range(4)]
+
 
     clock = 6e6
 
@@ -212,6 +270,12 @@ class LabjackU12(object):
         assert g in self.gains
         assert (ch >= 8) | (g == 1)
         return (self.gains.index(g) << 4) | (ch^0x8)
+    
+    def apply_ao0_correction(self, value):
+        return value - self.ao0_offset
+
+    def apply_ao1_correction(self, value):
+        return value - self.ao1_offset
 
     def apply_calibration(self, ch, g, v):
         if not ch & 0x8:
@@ -233,7 +297,7 @@ class LabjackU12(object):
         return max(min(v, 0x1000-1), 0)
     
     def ao_volts_to_bits(self, v):
-        return int(round(v*1023/5.))
+        return int(round(v*1023/5.2))
     
     def ai_bits_to_volts(self, ch, g, b):
         if not ch & 0x8:
@@ -362,11 +426,11 @@ class LabjackU12(object):
             assert 0 <= state_io <= 0xf
             self.state_io = state_io       
         if ao0 is not None:
-            assert 0 <= ao0 <= 5
-            self.ao0 = ao0
+            assert 0. <= ao0 <= 5.
+            self.ao0 = self.apply_ao0_correction(ao0)
         if ao1 is not None:
-            assert 0 <= ao1 <= 5
-            self.ao1 = ao1
+            assert 0. <= ao1 <= 5.
+            self.ao1 = self.apply_ao1_correction(ao1)
 
         ao0 = self.ao_volts_to_bits(self.ao0)
         ao1 = self.ao_volts_to_bits(self.ao1)

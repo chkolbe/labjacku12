@@ -25,7 +25,7 @@ class LabjackU12Tests(unittest.TestCase):
         for i in range(0,n,4):
             self.l.read_mem(i)
         t = (time.time()-a)/n*4
-        self.failUnless(t<18e-3)
+        self.assertTrue(t<18e-3)
 
     def test_watchdog_off(self):
         self.l.watchdog(timeout=1)
@@ -38,7 +38,7 @@ class LabjackU12Tests(unittest.TestCase):
         time.sleep(24)
         self.l.input_single(0, 1)
         time.sleep(26)
-        self.failUnlessRaises(u12.usb.USBError, 
+        self.assertRaises(u12.usb1.USBError, 
                 self.l.input_single, 0, 1)
         self.l = None
         while not self.l:
@@ -50,8 +50,8 @@ class LabjackU12Tests(unittest.TestCase):
 
     def test_calibration(self):
         c = self.l.calibration()
-        self.failUnlessEqual(len(c), 20)
-        self.failUnlessEqual(c, self.l.caldata)
+        self.assertEqual(len(c), 20)
+        self.assertEqual(c, self.l.caldata)
 
     def test_localid(self):
         i = self.l.local_id()
@@ -62,19 +62,19 @@ class LabjackU12Tests(unittest.TestCase):
 
     def test_firmware_version(self):
         v = self.l.firmware_version()
-        self.failUnlessEqual(v,1.10)
+        self.assertEqual(v,1.10)
 
     def test_digital_out(self):
         state_d, state_io, count = self.l.output(
                conf_d=0x55aa, conf_io=0x5,
                state_d=0x5a5a, state_io=0x3)
-        self.failUnlessEqual(state_d & 0x55aa & 0x5a5a,
+        self.assertEqual(state_d & 0x55aa & 0x5a5a,
                 0x55aa & 0x5a5a)
-        self.failUnlessEqual(~state_d & 0x55aa & ~0x5a5a,
+        self.assertEqual(~state_d & 0x55aa & ~0x5a5a,
                 0x55aa & ~0x5a5a)
-        self.failUnlessEqual(state_io & 0x5 & 0x3,
+        self.assertEqual(state_io & 0x5 & 0x3,
                 0x5 & 0x3)
-        self.failUnlessEqual(~state_io & 0x5 & ~0x3,
+        self.assertEqual(~state_io & 0x5 & ~0x3,
                 0x5 & ~0x3)
 
     def test_io_in_out_loop(self):
@@ -84,18 +84,18 @@ class LabjackU12Tests(unittest.TestCase):
         self.l.output(conf_io=0x1, state_io=0x0)
         for i in range(10):
             state_d, state_io, count = self.l.output(state_io=0x1)
-            self.failUnless(state_io & 0x2)
+            self.assertTrue(state_io & 0x2)
             state_d, state_io, count = self.l.output(state_io=0x0)
-            self.failUnless(not state_io & 0x2)
+            self.assertTrue(not state_io & 0x2)
 
     def test_ao(self):
         self.l.output(ao0=1)
-        self.failUnlessEqual(self.l.ao0, 1)
+        self.assertEqual(self.l.ao0, 1)
         self.l.output(ao1=1)
-        self.failUnlessEqual(self.l.ao1, 1)
+        self.assertEqual(self.l.ao1, 1)
         self.l.output(ao1=0, ao0=0)
-        self.failUnlessEqual(self.l.ao0, 0)
-        self.failUnlessEqual(self.l.ao1, 0)
+        self.assertEqual(self.l.ao0, 0)
+        self.assertEqual(self.l.ao1, 0)
 
     def test_ai_se(self):
         for c in range(4):
@@ -125,7 +125,7 @@ class LabjackU12Tests(unittest.TestCase):
             self.l.output(ao0=v, ao1=v)
             r = self.l.input(channels=(8,8,9,9), gains=(1,4,1,4))[0]
             for i in r:
-                self.failUnless(abs(v-i) < .1,
+                self.assertTrue(abs(v-i) < .1,
                         "measured %g for %g" % (i, v))
 
     def test_single_analog_in_cal_5v_loop(self):
@@ -135,7 +135,7 @@ class LabjackU12Tests(unittest.TestCase):
         """
         for s,c,e in [(5, 6, .1), (0, 7, .05), (2.5, 4, .05), (0, 5, .05)]:
             for v in self.l.input(channels=(c,c,c,c), gains=(1,1,1,1))[0]:
-                self.failUnless(abs(s-v) < e,
+                self.assertTrue(abs(s-v) < e,
                         "%g is not %g, channel %g" % (v, s, c))
 
     def test_diff_analog_in_cal_5v_loop(self):
@@ -149,11 +149,11 @@ class LabjackU12Tests(unittest.TestCase):
                 r = v[0]
                 if s*g > 20:
                     if s*g > 25:
-                        self.failUnless(v[3],
+                        self.assertTrue(v[3],
                             "%s should be overvoltage (%g, %g)" % (v,s,g))
                     continue
                 for i in r:
-                    self.failUnless(abs(s-i) < e,
+                    self.assertTrue(abs(s-i) < e,
                         "%g is not %g, channel %g, gain %g" % (i,s,c,g))
 
     def test_burst_speed(self):
@@ -161,9 +161,9 @@ class LabjackU12Tests(unittest.TestCase):
         a = time.time()
         v = list(self.l.burst_sync(channels=chans, gains=gains,
                 num_scans=scans, rate=rate))
-        self.failUnlessEqual(len(v), scans)
+        self.assertEqual(len(v), scans)
         scans_sec = scans/(time.time()-a)
-        self.failUnless(scans_sec > 500, # transferring the scan!
+        self.assertTrue(scans_sec > 500, # transferring the scan!
                 "scan took too long (%g Hz)" % scans_sec)
 
     def test_burst_loop(self):
@@ -176,7 +176,7 @@ class LabjackU12Tests(unittest.TestCase):
                 num_scans=scans, rate=rate)]
         for vi in v:
             for r in vi:
-                self.failUnless(abs(r-2.5) < .1,
+                self.assertTrue(abs(r-2.5) < .1,
                     "%s should be cal, 2.5v" % vi[0])
 
     def test_stream_speed(self):
@@ -184,9 +184,9 @@ class LabjackU12Tests(unittest.TestCase):
         a = time.time()
         v = list(self.l.stream_sync(channels=chans, gains=gains, 
                 num_scans=scans, rate=rate))
-        self.failUnlessEqual(len(v), scans)
+        self.assertEqual(len(v), scans)
         scans_sec = scans/(time.time()-a)
-        self.failUnless(scans_sec > 290,
+        self.assertTrue(scans_sec > 290,
                 "scan took too long (%g Hz)" % scans_sec)
 
     def test_stream_loop(self):
@@ -199,18 +199,18 @@ class LabjackU12Tests(unittest.TestCase):
                 num_scans=scans, rate=rate)]
         for vi in v:
             for r in vi:
-                self.failUnless(abs(r-2.5) < .1,
+                self.assertTrue(abs(r-2.5) < .1,
                         "%s should be cal, 2.5v" % vi[0])
 
     def test_counter(self):
         self.l.count(reset=True)
         c,t = self.l.count(reset=False)
-        self.failUnlessEqual(c, 0, "counter is %g" % c)
+        self.assertEqual(c, 0, "counter is %g" % c)
 
     def test_counter_reset_by_output(self):
         self.l.output(reset_counter=True)
         c,t = self.l.count(reset=False)
-        self.failUnlessEqual(c, 0, "counter is %g" % c)
+        self.assertEqual(c, 0, "counter is %g" % c)
 
     def test_io_counter_loop(self):
         """
@@ -222,7 +222,7 @@ class LabjackU12Tests(unittest.TestCase):
             self.l.output(state_io=0x8)
             self.l.output(state_io=0x0)
         c, t = self.l.count()
-        self.failUnlessEqual(c, 9,
+        self.assertEqual(c, 9,
                 "counted %g pulses" % c)
 
     def test_pulse_counter_loop(self):
@@ -234,10 +234,10 @@ class LabjackU12Tests(unittest.TestCase):
         t10, t20 = 0.001231, 0.002063
         errmask, t1, t2 = self.l.pulse(t1=t10, t2=t20,
                 lines=0x01, num_pulses=100)
-        self.failUnless(abs(t1-t10)/t10 < .1)
-        self.failUnless(abs(t2-t20)/t20 < .1)
+        self.assertTrue(abs(t1-t10)/t10 < .1)
+        self.assertTrue(abs(t2-t20)/t20 < .1)
         c, t = self.l.count()
-        self.failUnlessEqual(c, 100,
+        self.assertEqual(c, 100,
                 "counted %g pulses" % c)
 
 if __name__ == "__main__":
