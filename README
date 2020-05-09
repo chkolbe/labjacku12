@@ -4,14 +4,30 @@ Python Labjack U12 driver
 
 Requirements:
   
-  * libusb
-  * python-usb (aka pyusb; >= 0.4.1 earlier versions work but have bugs)
+  * libusb-1.0
+  * libusb1
 
 Setup:
   
   * copy the folling two lines to /etc/udev/rules.d/doc/85-usbdev.rules 
     and add yourself to the plugdev group (adduser yourself plugdev) to 
     be able to access the usb devfs device as a regular user:
+  * Mac OS Users take care you have libusb.dylib on the system
+    (If lib is not on your Path add it to libusb1 like:
+    site-packages/libusb1/libusb1.py in the function _loadLibrary()
+    for libusb_path in (
+              # macport standard path
+              '/opt/local/lib/libusb-1.0.dylib',
+              # fink standard path
+              '/sw/lib/libusb-1.0.dylib',
+              # My standard path                    <-- modified this
+              '/usr/local/lib/libusb-1.0.0.dylib',  <-- and this
+          ):
+          if os.path.exists(libusb_path):
+              break
+      else:
+          libusb_path = None
+    )
 
 ----------
 # Labjack U12
@@ -21,5 +37,4 @@ ATTRS{idProduct}=="0001", ATTRS{idVendor}=="0cd5", GROUP="plugdev", MODE="0660"
 Usage:
   
   * see examples in test/labjack_u12_tests.py
-  * for u12_scope.py you will need a full enthought chaco installation
 
