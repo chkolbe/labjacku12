@@ -3,6 +3,7 @@
 #
 # Labjack U12 driver
 # Copyright 2008, 2009 Robert Jordens, Thomas Uehlinger
+# Copyright 2020 Christopher Kolbe
 # 
 # This driver is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -62,7 +63,7 @@ class LabjackU12(object):
         self.handle = self.dev.open()
         try:
             self.handle.detachKernelDriver(self.id_interface)
-        except usb1.USBError as e:
+        except usb1.USBError:
             pass
         self.handle.setConfiguration(self.id_configuration)
         self.handle.claimInterface(self.id_interface)
@@ -80,7 +81,7 @@ class LabjackU12(object):
         """
         perform the initial dummy read necessary
         """
-        assert self.write((0,)*8) == 8
+        assert self.write([0x0, 0x0, 0x0, 0x0, 0x0, 0x57, 0x0, 0x0]) == 8
         try:
             return self.read(8, tmo=20)
         except usb1.USBError:
@@ -114,14 +115,15 @@ class LabjackU12(object):
                 self.ep_out.getAddress(), buf, tmo)
 
     def read(self, siz, tmo=20):
-        return self.handle.interruptRead(
-                self.ep_in.getAddress(), siz, tmo)
+        return list(self.handle.interruptRead(
+                self.ep_in.getAddress(), siz, tmo))
 
     def writeread(self, w, tmo=20, wtmo=20):
         assert len(w) == 8
         assert self.write(w, wtmo) == 8
-        r = self.read(8, tmo)
-        return tuple(v&0xff for v in r)
+        return self.read(8, tmo)
+        #r = self.read(8, tmo)
+        #return list(v&0xff for v in r)
 
     def read_mem(self, ad):
         """
@@ -129,7 +131,10 @@ class LabjackU12(object):
         returns four bytes from that address
         """
         assert ad >= 0 & ad <= 8188
-        w = (0,0,0,0,0,0x50) + divmod(ad, 0x100)
+        w = [0,0,0,0,0,0x50]
+        reminder, quotient = divmod(ad, 0x100)
+        w.append(reminder)
+        w.append(quotient)
         r = self.writeread(w)
         assert r[0] == 0x50
         assert w[6:] == r[6:]
@@ -142,7 +147,10 @@ class LabjackU12(object):
         """
         assert ad >= 0 & ad <= 0x1ffc
         assert len(val) == 4
-        w = tuple(val) + (0,81) + divmod(ad, 0x100)
+        w = list(val) + [0,81]
+        reminder, quotient = divmod(ad, 0x100)
+        w.append(reminder)
+        w.append(quotient)
         r = self.writeread(w)
         assert r[0] == 81
         assert w[6:] == r[6:]
@@ -152,7 +160,7 @@ class LabjackU12(object):
         causes the device to reset itself ending in re-enumeration
         and thus invalidation of self.handle
         """
-        self.write((0,0,0,0, 0,0x5f,0,0))
+        self.write([0,0,0,0, 0,0x5f,0,0])
         self.close()
 
     def reenumerate(self):
@@ -160,7 +168,7 @@ class LabjackU12(object):
         causes reenumeration without reset
         iunvalidates self.handle
         """
-        self.write((0,0,0,0, 0,0x40,0,0))
+        self.write([0,0,0,0, 0,0x40,0,0])
         self.close()
 
     def firmware_version(self):
@@ -193,9 +201,9 @@ class LabjackU12(object):
         four bytes used in differential mode
         """
         a = [self.read_mem(0x100+(0x010*j)) for j in range(8)]
-        print(a)
+        #print(a)
         b = [self.read_mem(0x180+(0x010*j)) for j in range(4)]
-        print(b)
+        #print(b)
         return [i[1] for i in a] + [i[3] for i in a] + [i[1] for i in b]
 
     def calibration_update(self):
@@ -250,13 +258,45 @@ class LabjackU12(object):
         careful: small timeouts cause permanent reset and prevent
         deactivation of the watchdog!
         """
-        ncyc = max(1, int(round((timeout or 0)*self.clock/(1<<16))))
-        w = (bool(get_fw), 0, 0, 0,
-                ((d0 is not None)<<7) | (bool(d0)<<6) |
-                ((d1 is not None)<<5) | (bool(d1)<<4) |
-                ((d8 is not None)<<3) | (bool(d8)<<2) |
-                (do_reset<<1) | ((timeout is not None)<<0), 0x53) + \
-                        divmod(ncyc, 0x100)
+
+        if(timeout is None):
+            ncyc = 1
+            do_timeout = 0
+        else:
+            ncyc = int( round(timeout*self.clock / (1<<16) ) )
+            do_timeout = 1
+
+        if(d0 is None):
+            d0_active = 0
+            d0_state = 0
+        else:
+            d0_active = 1
+            d0_state = int(d0)
+
+        if(d1 is None):
+            d1_active = 0
+            d1_state = 0
+        else:
+            d1_active = 1
+            d1_state = int(d0)
+
+        if(d8 is None):
+            d8_active = 0
+            d8_state = 0
+        else:
+            d8_active = 1
+            d8_state = int(d0)
+
+        #ncyc = max(1, int(round((timeout or 0)*self.clock/(1<<16))))
+        w = [int(get_fw), 0, 0, 0,
+                ((d0_active)<<7) | (d0_state<<6) |
+                ((d1_active)<<5) | (d1_state<<4) |
+                ((d8_active)<<3) | (d8_state<<2) |
+                (do_reset<<1) | (do_timeout<<0), 
+                0x53]
+        reminder, quotient = divmod(ncyc, 0x100)
+        w.append(reminder)
+        w.append(quotient)
         r = self.writeread(w)
         assert r[2:] == w[2:]
         if get_fw:
@@ -348,7 +388,7 @@ class LabjackU12(object):
             assert not read_counter
             w[4] |= ((int(10-math.ceil(math.log(num_scans, 2))) << 5) | 
                         (trigger_state << 2) | ((trigger & 0x3) << 3))
-            w[6] |= (feature_reports << 7) | (bool(trigger) << 6)
+            w[6] |= (feature_reports << 7) | (int(trigger) << 6)
         elif cmd == 4: # single
             assert not read_counter
             assert not trigger
@@ -435,9 +475,15 @@ class LabjackU12(object):
         ao0 = self.ao_volts_to_bits(self.ao0)
         ao1 = self.ao_volts_to_bits(self.ao1)
 
-        w = list(divmod(self.conf_d^0xffff, 0x100)) + \
-            list(divmod(self.state_d, 0x100)) + \
-            [((self.conf_io^0xf) << 4) | self.state_io, 0,
+        w = []
+
+        reminder, quotient = divmod(self.conf_d^0xffff, 0x100)
+        w.append(reminder)
+        w.append(quotient)
+        reminder, quotient = divmod(self.state_d, 0x100)
+        w.append(reminder)
+        w.append(quotient)
+        w += [((self.conf_io^0xf) << 4) | self.state_io, 0,
                 ao0 >> 2, ao1 >> 2]
         if set_ao or reset_counter:
             w[5] = ((set_d_io << 4) | (reset_counter << 5) | 
@@ -445,7 +491,7 @@ class LabjackU12(object):
         else:
             w[5] = 0x57
             w[6] = (set_d_io << 0)
-        r = self.writeread(w, tmo=20)
+        r = self.writeread(w)
         
         assert not r[0] & (1 << 7)
         state_d = (r[1] << 8) + r[2]
@@ -556,7 +602,7 @@ class LabjackU12(object):
         reset: whether to reset the counter to zero after reading it
         strobe: whether to activate the strobe (STB) output
         """
-        w = ((reset & 1) | (strobe & 2), 0, 0, 0, 0, 82, 0, 0)
+        w = [(reset & 1) | (strobe & 2), 0, 0, 0, 0, 82, 0, 0]
         a = time.time()
         r = self.writeread(w, 20)
         t = (time.time()+a)/2.
@@ -567,8 +613,8 @@ class LabjackU12(object):
         """
         Output num_pulses pulse with off-time t1 and on-time t2 
             on the digital lines D0..D7.
-        t1: off-time
-        t2: on-time
+        t1: off-time in us
+        t2: on-time in us
         lines: bitmask defining on which of D0..D7 the pulses should be output
         num_pulses: number of pulses to output
         clear_first: whether to clear the digital lines first
@@ -587,9 +633,88 @@ class LabjackU12(object):
         assert 1 <= c2 <= 256
         t1 = (100+5*c1+121*b1*c1)/self.clock
         t2 = (100+5*c2+121*b2*c2)/self.clock
-        w = (b1, c1, b2, c2, lines, 0x64, (clear_first << 7) | 
-                (num_pulses >> 8), (num_pulses & 0xff))
-        r = self.writeread(w, int(20+1e3*(t1+t2)*num_pulses))
+        w = [b1, c1, b2, c2, lines, 0x64, (clear_first << 7) | 
+                (num_pulses >> 8), (num_pulses & 0xff)]
+        timeout=min(20, int((t1+t2)*num_pulses*1000))
+        r = self.writeread(w)
         errmask = r[4]
         return errmask, t1, t2
+    
+    def spi(self, data, mode = 'A', add_delay = '1ms', cs_line=0, cs_active=True):
+        """
+        Name: LabjackU12.spi( data, mode = 'A', add_delay = '1ms', cs_line=0, cs_active=True)
+        Args: data, A tupple of one up to four bytes to write using SPI
+              mode, 'A' CPHA=1, CPOL=1, 'B' CPHA=1, CPOL=0, 
+              'C' CPHA=0, CPOL=1, or 'D' CPHA=0, CPOL=0
+              add_delay, define '1ms' or '100us' for delay between Bytes
+              cs_line, select D0 to D7 for Chip Select
+              cs_active, chip selected by Active Low == False or Active High == True
+        Desc: This function performs SPI communication. See Section 5.14 of the
+              User's Guide. Used Sub D 25 Digital Lines (MOSI is D13, MISO is D14,
+              SCK  is D15) and CS.
+        Returns: A Tupple with the read bytes
+        Example:
+        >>> import u12.LabjackU12
+        >>> d = LabjackU12()
+        >>> d.spi((1,2,3,4))
+        (1,2,3,4)
+        """
+        command = [ 0, 0, 0, 0, 0, 0, 0, 0 ]
 
+        assert isinstance(data, tuple)
+        assert 1 <= len(data) <= 4
+
+        #command[0:len(data)] = data.reverse()
+        command[0] = data[3]
+        command[1] = data[2]
+        command[2] = data[1]
+        command[3] = data[0]
+
+        if add_delay == '100us':
+        #    bf.bit6 = 1
+            command[4] = (1 << 6)
+        else:
+        #    bf.bit7 = 1
+            command[4] = (1 << 7)
+
+        spiModes = ('A', 'B', 'C', 'D')
+        #bf[7-spiModes.index(mode)] = 1
+        command[4] |= (1 << spiModes.index(mode))
+
+        #command[4] = int(bf) 
+
+        # 01100010 (SPI)
+        #bf2 = BitField()
+        #bf2.bit6 = 1
+        #bf2.bit5 = 1
+        #bf2.bit1 = 1
+
+        #command[5] = int(bf2)
+        command[5] = 0b01100010
+        command[6] = len(data)
+
+        # bf3 = BitField(rawByte = CSLineNumber)
+        # bf3.bit7 = int(ControlCS)
+        # bf3.bit6 = int(StateOfActiveCS)
+
+        # command[7] = int(bf3)
+        assert 0 <= cs_line <= 7
+        command[7] = (1 << 7) | (int(cs_active) << 6) | cs_line
+
+        results = self.writeread(command)
+
+        assert results[5] == command[5]
+        assert results[4] == results[4] & 0b11110000
+
+        # returnDict = dict()
+        # returnDict['DataByte3'] = results[0]
+        # returnDict['DataByte2'] = results[1]
+        # returnDict['DataByte1'] = results[2]
+        # returnDict['DataByte0'] = results[3]
+
+        # bfLabels = ["CSStateTris Error Flag", "SCKTris Error Flag", "MISOTris Error Flag", "MOSITris Error Flag"]
+        # bf = BitField( rawByte = results[4], labelPrefix = "", labelList = bfLabels )
+
+        # returnDict["ErrorFlags"] = bf
+
+        return results
